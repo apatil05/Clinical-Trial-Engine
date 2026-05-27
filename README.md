@@ -1,64 +1,210 @@
 # Clinical Trial Eligibility Engine
 
-An AI-powered pipeline that automatically matches patients to clinical trials — turning a process that takes days into one that takes seconds.
+An AI-powered tool that matches patients to clinical trials in seconds — automating a process that today takes coordinators days to weeks by hand.
+
+Built at the **AIxBio Hackathon at Bayer Co.Lab**, Cambridge MA · Boston Tech Week 2026
 
 ---
 
 ## The Problem
 
-Getting a patient into a clinical trial today is almost entirely manual. A coordinator reads through pages of medical records, then reads through pages of trial requirements, and tries to match them by hand. This takes days to weeks per patient, and most eligible patients are never identified at all.
+Finding the right clinical trial for a patient is one of the most time-consuming jobs in medical research. A coordinator reads through a patient's entire medical history, then reads through the eligibility requirements of dozens of trials, and matches them manually — line by line. Most eligible patients are never found. Not because the trials don't exist, but because the process doesn't scale.
 
-This engine automates that process. It reads both inputs, extracts the key facts, and determines whether a patient qualifies — with a plain-English explanation a human can verify in seconds.
+This tool changes that. Paste a patient record, search for trials by condition, and hit **Screen**. Within seconds you get a ranked list of matching trials — with a plain-English explanation of exactly which criteria were met, which were not, and which couldn't be determined from the available information.
+
+Every decision the AI makes is shown, explained, and reviewable by a human before any action is taken.
+
+---
+
+## Why It Matters
+
+- **80% of clinical trial timeline overruns** are caused by recruitment delays
+- The average time to manually screen a single patient is measured in days
+- Eligible patients are routinely missed because they aren't connected to the right research network
+- This tool makes eligibility screening fast enough to run on every patient, not just the ones a coordinator happens to think of
+
+---
+
+## How It Works
+
+**Step 1 — Extraction**
+
+The tool reads a patient's medical record in plain text and extracts the clinically relevant facts: age, diagnoses, current medications, lab results, and medical history. The same step runs on the trial's inclusion and exclusion criteria, pulled live from ClinicalTrials.gov.
+
+**Step 2 — Matching**
+
+Both sets of structured facts are compared criterion by criterion. Each criterion gets a verdict — met, not met, or uncertain — with a plain-English reason. The result is an overall eligibility score and a two-sentence summary a coordinator can read in under ten seconds.
+
+**Step 3 — Queue**
+
+Matched patients are filed into a ranked queue by match strength. The coordinator's to-do list builds itself.
+
+---
+
+## Demo
+
+| Step | What Happens |
+|---|---|
+| Load patient | A pre-filled synthetic patient record appears in the input panel |
+| Search trials | Live search against ClinicalTrials.gov returns real active trials |
+| Screen | AI runs extraction and matching — queue populates in seconds |
+| Review | Click any result to see the full criterion-by-criterion breakdown |
+
+The criterion breakdown is the most important moment. It shows that the AI's reasoning is fully auditable — which is the central trust problem in medical AI, and what separates this from a chatbot.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React + Vite |
+| Styling | Tailwind CSS |
+| Backend | Python + FastAPI |
+| AI | Nebius API — Llama 3.1 70B Instruct |
+| Database | Supabase (PostgreSQL) |
+| Trial Data | ClinicalTrials.gov public API |
 
 ---
 
 ## Project Structure
 
 ```
-/backend
-  main.py              # FastAPI app
-  extractor.py         # Prompt logic for parsing records + trials
-  matcher.py           # Prompt logic for eligibility comparison
-  trials_fetcher.py    # Pulls live data from ClinicalTrials.gov API
-  models.py            # Pydantic schemas (Patient, Trial, MatchResult)
-
-/frontend
-  index.html
-  app.js
-  style.css
+/
+├── backend/
+│   ├── main.py              # FastAPI app, CORS config, route registration
+│   ├── extractor.py         # Extraction prompt — raw text → structured JSON
+│   ├── matcher.py           # Matching prompt — patient JSON vs trial JSON → verdict
+│   ├── trials_fetcher.py    # ClinicalTrials.gov API integration
+│   ├── models.py            # Pydantic schemas (Patient, Trial, MatchResult)
+│   └── db.py                # Supabase client initialization
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── PatientInput.jsx    # Paste or load a patient record
+│   │   │   ├── TrialSearch.jsx     # Search trials by condition
+│   │   │   ├── MatchResult.jsx     # Per-criterion breakdown + summary
+│   │   │   └── Queue.jsx           # All screened patients ranked by score
+│   │   ├── App.jsx
+│   │   ├── main.jsx
+│   │   └── api.js                  # All fetch calls to the FastAPI backend
+│   ├── index.html
+│   └── vite.config.js
+│
+├── .env.example
+└── README.md
 ```
 
 ---
 
-## Tech Stack
+## Database
 
-- **Backend:** Python + FastAPI
-- **AI:** Nebius API (OpenAI-compatible) running Llama 3.1 70B
-- **Data:** ClinicalTrials.gov public API
-- **Frontend:** HTML / CSS / JS
+Three tables. Results persist across sessions and are always ranked by match score.
+
+```sql
+patients (
+  id                  uuid primary key default gen_random_uuid(),
+  raw_text            text,
+  extracted_profile   jsonb,
+  created_at          timestamptz default now()
+)
+
+trials (
+  id                  uuid primary key default gen_random_uuid(),
+  nct_id              text unique,
+  title               text,
+  condition           text,
+  raw_criteria        text,
+  parsed_criteria     jsonb,
+  created_at          timestamptz default now()
+)
+
+match_results (
+  id                  uuid primary key default gen_random_uuid(),
+  patient_id          uuid references patients(id),
+  trial_id            uuid references trials(id),
+  overall_score       int,
+  status              text,
+  criteria_breakdown  jsonb,
+  summary             text,
+  created_at          timestamptz default now()
+)
+```
 
 ---
 
-## Setup
+## API Endpoints
 
-### 1. Install dependencies
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/match` | Run the full pipeline — extract, match, save to Supabase, return result |
+| `GET` | `/trials/search` | Search ClinicalTrials.gov by condition or keyword |
+| `GET` | `/queue` | Return all match results from Supabase ranked by score |
+| `GET` | `/queue/{id}` | Return a single result with full criterion breakdown |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- A [Supabase](https://supabase.com) project with the schema above applied
+- A [Nebius](https://nebius.ai) account with API access
+
+### 1. Clone the repo
 
 ```bash
-pip install fastapi uvicorn openai httpx
+git clone https://github.com/your-handle/clinical-trial-eligibility-engine
+cd clinical-trial-eligibility-engine
 ```
 
-### 2. Configure Nebius
-
-Nebius uses an OpenAI-compatible endpoint. Set your API key as an environment variable:
+### 2. Set up environment variables
 
 ```bash
-export NEBIUS_API_KEY=your-nebius-key
+cp .env.example .env
 ```
 
-Then initialise the client in your backend:
+Open `.env` and fill in:
+
+```env
+NEBIUS_API_KEY=your-nebius-key
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-supabase-anon-key
+```
+
+### 3. Install and run the backend
+
+```bash
+cd backend
+pip install fastapi uvicorn openai httpx supabase python-dotenv
+uvicorn main:app --reload
+```
+
+Backend runs at `http://localhost:8000`
+Interactive API docs at `http://localhost:8000/docs`
+
+### 4. Install and run the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend runs at `http://localhost:5173`
+
+---
+
+## Nebius Configuration
+
+Nebius uses an OpenAI-compatible endpoint — the client setup is straightforward:
 
 ```python
 from openai import OpenAI
+import os
 
 client = OpenAI(
     api_key=os.environ["NEBIUS_API_KEY"],
@@ -68,119 +214,24 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="meta-llama/Meta-Llama-3.1-70B-Instruct",
     messages=[{"role": "user", "content": prompt}],
-    temperature=0.1  # low temp for consistent structured output
+    temperature=0.1
 )
 ```
 
-> Check your Nebius dashboard to confirm the exact model name strings available on your account.
-
-### 3. Run the server
-
-```bash
-uvicorn backend.main:app --reload
-```
+> All matching calls use `temperature=0.1` to keep JSON output stable and minimise hallucination. Verify the exact model name string in your Nebius dashboard before running.
 
 ---
 
-## How It Works
+## Important Notes
 
-The pipeline has two AI steps and one data step.
+All patient data in this project is **fully synthetic** — no real patient records are used, stored, or referenced anywhere. This tool is a **decision-support system**. Every result is intended to be reviewed and confirmed by a qualified human coordinator before any action is taken.
 
-**Step 1 — Extraction**
-
-Raw text in, structured JSON out. The extractor reads a patient record and returns a clean object with age, diagnoses, medications, lab results, and medical history. The same step runs on the trial's eligibility criteria.
-
-**Step 2 — Matching**
-
-Both JSON objects are sent to the matcher, which evaluates each criterion one by one and returns a verdict per criterion, an overall score, and a plain-English summary.
-
-**Step 3 — Queue**
-
-Results are filed into a coordinator queue ranked by match strength, so the to-do list builds itself.
+If a patient record doesn't mention a field required by a trial criterion, that criterion is marked `UNCERTAIN` rather than `INELIGIBLE`. Missing data is not the same as a failed criterion.
 
 ---
 
-## The Two Core Prompts
+## Built With
 
-### Extraction prompt
-
-```
-You are a medical data extractor. Given the following patient record,
-extract and return ONLY a JSON object with these fields:
-age, diagnoses (list), medications (list), lab_results (dict),
-medical_history (list). Return nothing else — no explanation, no markdown.
-```
-
-### Matching prompt
-
-```
-You are a clinical trial eligibility analyst. Given a patient profile
-and a trial's inclusion/exclusion criteria, evaluate each criterion
-one by one. Return ONLY a JSON object with:
-- overall_score (int, criteria met out of total)
-- status ("ELIGIBLE" | "INELIGIBLE" | "UNCERTAIN")
-- criteria (list of {criterion, status, reason})
-- summary (2-sentence plain English explanation)
-Return nothing else.
-```
-
-> Low temperature + explicit JSON-only instruction is what keeps output reliable. Test this in hour one before building anything else.
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/match` | Screen a patient against a trial |
-| `GET` | `/trials/search` | Search ClinicalTrials.gov by condition or keyword |
-| `GET` | `/queue` | Return all screenings ranked by match score |
-
----
-
-## Work Split
-
-### Person A — Backend + AI pipeline
-- FastAPI server setup
-- Extraction prompt (patient record → structured JSON)
-- Matching prompt (patient JSON vs trial JSON → verdict per criterion)
-- `/match` endpoint and `/trials/search` endpoint wrapping ClinicalTrials.gov
-
-### Person B — Frontend + Data
-- Input UI (paste patient record, search/select a trial)
-- Results UI (score, per-criterion breakdown, plain-English explanation)
-- Queue view (all screened patients ranked by match strength)
-- Pull and format sample data from ClinicalTrials.gov for the demo
-
----
-
-## Build Order
-
-| Hours | Milestone |
-|-------|-----------|
-| 1–3 | FastAPI skeleton + Nebius connection working + extraction prompt returning valid JSON |
-| 3–7 | Matching prompt tuned + `/match` endpoint live + basic frontend connected end to end |
-| 7–12 | ClinicalTrials.gov integration + queue view + one patient screened against multiple trials |
-| 12–18 | Polish, error handling, 3 canned demo cases loaded |
-| 18–24 | Demo prep, edge case fixes, presentation flow |
-
----
-
-## Demo Flow
-
-Walk through this sequence for judges:
-
-1. Load a pre-filled patient record in the UI
-2. Search ClinicalTrials.gov live — real trials appear
-3. Hit **Screen** — the queue populates in seconds
-4. Click a result — show the criterion-by-criterion breakdown with pass/fail per item
-
-The criterion breakdown is the most important moment. It shows the AI's reasoning is auditable — which is the central trust problem in medical AI, and what separates this from a chatbot.
-
----
-
-## Notes
-
-- Use `temperature=0.1` on all matching calls to minimise hallucination and keep JSON output stable
-- If a patient record doesn't mention a required field, mark it as `UNCERTAIN` rather than `INELIGIBLE` — missing data is not the same as a failed criterion
-- Have at least three sample records ready for the demo: one strong match, one partial match, one rejection
+A collaboration of **C10 Labs**, **LabCentral**, **Bayer Co.Lab**, and **Evolved Technology**.
+Compute provided by **Nebius**.
+Part of [Boston Tech Week 2026](https://www.tech-week.com).
