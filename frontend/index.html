@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrialEngine — Clinical Trial Matching</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      :root {
+        --bg:                 #ECEAE5;
+        --surface:            #F5F3EF;
+        --surface-2:          #E4E1DB;
+        --border:             #C8C3BB;
+        --border-hard:        #7A756D;
+        --text:               #0C0B09;
+        --text-mid:           #3A3630;
+        --text-muted:         #6B6560;
+        --text-hint:          #A09A92;
+        --accent:             #2A6B5C;
+        --accent-dark:        #1D4F44;
+        --accent-light:       #D5E9E4;
+        --eligible:           #2A7D4F;
+        --eligible-bg:        #EBF5EE;
+        --eligible-border:    #A3D4B3;
+        --ineligible:         #B83232;
+        --ineligible-bg:      #F9ECEC;
+        --ineligible-border:  #DDA3A3;
+        --uncertain:          #A07030;
+        --uncertain-bg:       #FBF4E8;
+        --uncertain-border:   #D4B57A;
+        --font-display: 'Playfair Display', Georgia, serif;
+        --font-body:    'IBM Plex Sans', system-ui, sans-serif;
+        --font-mono:    'JetBrains Mono', 'Courier New', monospace;
+        --radius:       2px;
+        --shadow-sm:    0 1px 3px rgba(0,0,0,0.06);
+        --shadow-md:    0 4px 16px rgba(0,0,0,0.09);
+      }
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+      body {
+        font-family: var(--font-body);
+        background-color: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      /* Subtle grid texture */
+      body::before {
+        content: '';
+        position: fixed; inset: 0;
+        background-image:
+          linear-gradient(rgba(0,0,0,0.022) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(0,0,0,0.022) 1px, transparent 1px);
+        background-size: 44px 44px;
+        pointer-events: none;
+        z-index: 0;
+      }
+      #root { position: relative; z-index: 1; }
+
+      .font-display { font-family: var(--font-display); }
+      .font-mono    { font-family: var(--font-mono); }
+
+      ::-webkit-scrollbar { width: 5px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
+
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes spin    { to { transform: rotate(360deg); } }
+      @keyframes blink   { 0%,100% { opacity:1; } 50% { opacity:0; } }
+      @keyframes score-arc { from { stroke-dashoffset: 314; } }
+
+      .animate-fade-up   { animation: fadeUp 0.5s cubic-bezier(0.16,1,0.3,1) both; }
+      .animate-fade-in   { animation: fadeIn 0.35s ease both; }
+      .animate-spin-slow { animation: spin 1.1s linear infinite; }
+      .score-arc         { animation: score-arc 1.2s ease both; }
+
+      .stagger > *:nth-child(1)  { animation-delay: 0ms; }
+      .stagger > *:nth-child(2)  { animation-delay: 70ms; }
+      .stagger > *:nth-child(3)  { animation-delay: 140ms; }
+      .stagger > *:nth-child(4)  { animation-delay: 210ms; }
+      .stagger > *:nth-child(5)  { animation-delay: 280ms; }
+      .stagger > *:nth-child(6)  { animation-delay: 350ms; }
+      .stagger > *:nth-child(7)  { animation-delay: 420ms; }
+      .stagger > *:nth-child(8)  { animation-delay: 490ms; }
+      .stagger > *:nth-child(9)  { animation-delay: 560ms; }
+      .stagger > *:nth-child(10) { animation-delay: 630ms; }
+
+      /* Cards */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .card-elevated {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-md);
+      }
+      .terminal-card {
+        background: var(--surface);
+        border: 1.5px solid var(--border-hard);
+        border-radius: 0;
+        overflow: hidden;
+      }
+
+      /* Buttons — square, uppercase, tracked */
+      .btn-primary {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 13px 28px;
+        background: var(--text);
+        color: var(--surface);
+        font-family: var(--font-body);
+        font-size: 11px; font-weight: 600;
+        border: 1.5px solid var(--text);
+        border-radius: 0;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .btn-primary:hover:not(:disabled) { background: var(--text-mid); border-color: var(--text-mid); }
+      .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+      .btn-secondary {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 12px 24px;
+        background: transparent;
+        color: var(--text);
+        font-family: var(--font-body);
+        font-size: 11px; font-weight: 600;
+        border: 1.5px solid var(--border-hard);
+        border-radius: 0;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .btn-secondary:hover { background: var(--surface-2); border-color: var(--text-mid); }
+
+      .btn-ghost {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 8px 12px;
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-body);
+        font-size: 11px; font-weight: 500;
+        border: none; border-radius: 0;
+        cursor: pointer;
+        transition: color 0.15s;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .btn-ghost:hover { color: var(--text); }
+
+      .btn-accent {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 13px 22px;
+        background: var(--accent);
+        color: var(--surface);
+        font-family: var(--font-mono);
+        font-size: 11px; font-weight: 500;
+        border: 1.5px solid var(--accent-dark);
+        border-radius: 0;
+        cursor: pointer;
+        transition: background 0.15s;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .btn-accent:hover:not(:disabled) { background: var(--accent-dark); }
+      .btn-accent:disabled { opacity: 0.45; cursor: not-allowed; }
+
+      /* Form controls */
+      textarea, input[type="text"] {
+        font-family: var(--font-body);
+        font-size: 14px;
+        color: var(--text);
+        background: var(--surface);
+        border: 1.5px solid var(--border);
+        border-radius: 0;
+        padding: 12px 14px;
+        width: 100%;
+        outline: none;
+        transition: border-color 0.15s;
+        resize: vertical;
+        line-height: 1.6;
+      }
+      textarea:focus, input[type="text"]:focus { border-color: var(--accent); }
+
+      /* Badges */
+      .badge {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 3px 8px;
+        border-radius: 0;
+        font-size: 10px; font-weight: 600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+        white-space: nowrap;
+        border: 1px solid;
+      }
+      .badge-eligible   { background: var(--eligible-bg);   color: var(--eligible);   border-color: var(--eligible-border); }
+      .badge-ineligible { background: var(--ineligible-bg); color: var(--ineligible); border-color: var(--ineligible-border); }
+      .badge-uncertain  { background: var(--uncertain-bg);  color: var(--uncertain);  border-color: var(--uncertain-border); }
+      .badge-primary    { background: var(--accent-light);  color: var(--accent);     border-color: #8DBBAF; }
+      .badge-neutral    { background: var(--surface-2);     color: var(--text-muted); border-color: var(--border); }
+      .badge-accent     { background: var(--accent-light);  color: var(--accent);     border-color: #8DBBAF; }
+
+      /* Syntax highlighting inside terminal textarea overlay */
+      .hi-term { color: var(--accent); font-weight: 500; }
+      .hi-val  { color: var(--text-muted); }
+
+      /* Step dots */
+      .step-dot {
+        width: 6px; height: 6px;
+        border-radius: 0;
+        background: var(--border);
+        transition: background 0.3s;
+      }
+      .step-dot.active { background: var(--accent); }
+      .step-dot.done   { background: var(--text-muted); }
+
+      /* Criteria table */
+      .criteria-row { border-bottom: 1px solid var(--surface-2); transition: background 0.1s; }
+      .criteria-row:nth-child(even) { background: var(--surface-2); }
+      .criteria-row:hover { background: var(--accent-light); }
+
+      /* Pulsing status dot */
+      .status-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .status-dot-green {
+        background: var(--eligible);
+        animation: pulse-dot 2.5s ease infinite;
+      }
+      @keyframes pulse-dot {
+        0%,100% { opacity: 1; }
+        50%      { opacity: 0.4; }
+      }
+
+      /* Terminal cursor */
+      .cursor-blink {
+        display: inline-block;
+        width: 8px; height: 13px;
+        background: var(--accent);
+        animation: blink 1s step-end infinite;
+        vertical-align: middle;
+        margin-left: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
