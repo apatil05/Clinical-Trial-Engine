@@ -61,7 +61,7 @@ The criterion breakdown is the most important moment. It shows that the AI's rea
 | Frontend | React + Vite |
 | Styling | Tailwind CSS |
 | Backend | Python + FastAPI |
-| AI | Nebius API — Llama 3.1 70B Instruct |
+| AI | Nebius API — Llama 3.3 70B Instruct |
 | Database | Supabase (PostgreSQL) |
 | Trial Data | ClinicalTrials.gov public API |
 
@@ -171,20 +171,47 @@ Open `.env` and fill in:
 
 ```env
 NEBIUS_API_KEY=your-nebius-key
+NEBIUS_MODEL=meta-llama/Llama-3.3-70B-Instruct
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-supabase-anon-key
+MAX_TRIALS=12
+MATCH_CONCURRENCY=8
 ```
+
+### 2b. Apply Supabase schema (required for persistence)
+
+In Supabase Dashboard → **SQL Editor**, paste and run:
+
+`supabase/schema.sql`
+
+This creates `patients`, `trials`, and `match_results` with permissive demo RLS policies so the anon key can read/write.
+
+Verify with:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+You should see `"database": { "ready": true, ... }`.
 
 ### 3. Install and run the backend
 
 ```bash
 cd backend
-pip install fastapi uvicorn openai httpx supabase python-dotenv
-uvicorn main:app --reload
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Backend runs at `http://localhost:8000`
 Interactive API docs at `http://localhost:8000/docs`
+
+If port `8000` is in use from a stale dev process:
+
+```bash
+lsof -tiTCP:8000 -sTCP:LISTEN | xargs kill
+```
 
 ### 4. Install and run the frontend
 

@@ -1,55 +1,59 @@
 import { useState, useEffect } from 'react'
 
 /**
- * ScreeningLoader — animated loading state shown during bulk trial matching.
- * Fakes a per-trial progress counter that animates over ~20s,
- * then snaps to 100% when real results arrive.
+ * ScreeningLoader — progress UI during bulk trial matching.
+ * Uses a smooth estimate until the API returns, then snaps to totalScreened.
  */
-export default function ScreeningLoader({ condition, maxTrials = 20, isDone = false }) {
+export default function ScreeningLoader({
+  condition,
+  maxTrials = 8,
+  totalScreened = null,
+  isDone = false,
+}) {
   const [screened, setScreened] = useState(0)
-  const [phase, setPhase] = useState('searching') // 'searching' | 'matching' | 'done'
+  const [phase, setPhase] = useState('searching')
   const [dots, setDots] = useState('')
 
-  // Animated ellipsis
+  const targetTotal = totalScreened ?? maxTrials
+
   useEffect(() => {
     const id = setInterval(() => {
-      setDots(d => d.length >= 3 ? '' : d + '.')
+      setDots(d => (d.length >= 3 ? '' : d + '.'))
     }, 400)
     return () => clearInterval(id)
   }, [])
 
-  // Fake progress: 0 → maxTrials over ~20s, accelerating then slowing
   useEffect(() => {
     if (isDone) {
-      setScreened(maxTrials)
+      setScreened(targetTotal)
       setPhase('done')
       return
     }
 
-    // Phase 1: searching (0-2s)
-    const searchTimer = setTimeout(() => setPhase('matching'), 2000)
+    setScreened(0)
+    setPhase('searching')
 
-    // Phase 2: counting up trials
-    let count = 0
+    const searchTimer = setTimeout(() => setPhase('matching'), 1500)
+
     const interval = setInterval(() => {
-      if (count >= maxTrials - 1) {
-        clearInterval(interval)
-        return
-      }
-      // Variable speed: fast start, slow finish
-      const progress = count / maxTrials
-      const delay = progress < 0.6 ? 600 : 1200
-      count++
-      setScreened(count)
-    }, 750)
+      setScreened(prev => {
+        if (prev >= maxTrials) {
+          clearInterval(interval)
+          return maxTrials
+        }
+        return prev + 1
+      })
+    }, 550)
 
     return () => {
       clearTimeout(searchTimer)
       clearInterval(interval)
     }
-  }, [isDone, maxTrials])
+  }, [isDone, maxTrials, targetTotal])
 
-  const progressPct = isDone ? 100 : Math.round((screened / maxTrials) * 100)
+  const progressPct = isDone
+    ? 100
+    : Math.min(100, Math.round((screened / maxTrials) * 100))
 
   return (
     <div
@@ -64,7 +68,6 @@ export default function ScreeningLoader({ condition, maxTrials = 20, isDone = fa
         textAlign: 'center',
       }}
     >
-      {/* Animated orb */}
       <div
         style={{
           width: 72, height: 72, borderRadius: '50%',
@@ -79,7 +82,6 @@ export default function ScreeningLoader({ condition, maxTrials = 20, isDone = fa
         {isDone ? '✓' : '🔬'}
       </div>
 
-      {/* Status headline */}
       <h2
         className="font-display"
         style={{ fontSize: 28, fontWeight: 600, color: 'var(--text)', marginBottom: 10 }}
@@ -93,13 +95,12 @@ export default function ScreeningLoader({ condition, maxTrials = 20, isDone = fa
 
       <p style={{ fontSize: 15, color: 'var(--text-muted)', marginBottom: 36, lineHeight: 1.6 }}>
         {isDone
-          ? `Screened ${maxTrials} trials for ${condition}. Showing your top matches.`
+          ? `Screened ${targetTotal} trials for ${condition}. Showing your top matches.`
           : phase === 'searching'
           ? `Finding active recruiting trials for "${condition}"`
           : `Analyzing your eligibility for each trial`}
       </p>
 
-      {/* Progress bar */}
       <div style={{ width: '100%', maxWidth: 420, marginBottom: 14 }}>
         <div style={{
           height: 6,
@@ -119,26 +120,24 @@ export default function ScreeningLoader({ condition, maxTrials = 20, isDone = fa
         </div>
       </div>
 
-      {/* Counter */}
       {phase !== 'searching' && (
         <p
           className="font-mono"
           style={{ fontSize: 13, color: 'var(--text-muted)' }}
         >
           {isDone
-            ? `${maxTrials} / ${maxTrials} trials screened`
+            ? `${targetTotal} / ${targetTotal} trials screened`
             : `${screened} / ${maxTrials} trials screened`}
         </p>
       )}
 
-      {/* Steps */}
       <div style={{
         display: 'flex', gap: 28, marginTop: 44,
         fontSize: 12, color: 'var(--text-hint)',
       }}>
         {[
-          { label: 'Extract profile',   done: true },
-          { label: 'Search trials',     done: phase !== 'searching' || isDone },
+          { label: 'Extract profile', done: true },
+          { label: 'Search trials', done: phase !== 'searching' || isDone },
           { label: 'Score eligibility', done: isDone },
         ].map((s, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

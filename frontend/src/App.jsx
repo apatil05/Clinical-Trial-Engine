@@ -27,6 +27,7 @@ export default function App() {
   const [isScreening, setIsScreening]       = useState(false)
   const [screeningDone, setScreeningDone]   = useState(false)
   const [error, setError]                   = useState(null)
+  const [cacheInfo, setCacheInfo]           = useState(null)
 
   // ── Step 1: User submits patient notes → extract profile ──
   async function handleAnalyze(text) {
@@ -50,11 +51,25 @@ export default function App() {
   async function handleStartMatching() {
     if (!confirmedCondition.trim()) return
     setError(null)
+    setCacheInfo(null)
     setIsScreening(true)
     setScreeningDone(false)
     setStep('screening')
     try {
-      const data = await runBulkMatch(patientText, confirmedCondition.trim())
+      const data = await runBulkMatch(
+        patientText,
+        confirmedCondition.trim(),
+        extractedProfile,
+        8,
+      )
+      if (data.persisted_to_db === false && data.db_message) {
+        setError(`Saved in-memory only: ${data.db_message}`)
+      } else if (data.cache_hits > 0) {
+        setCacheInfo(
+          `⚡ ${data.cache_hits} trial scores loaded from database cache` +
+          (data.llm_calls > 0 ? ` · ${data.llm_calls} new AI screenings` : ' · instant replay'),
+        )
+      }
       setMatchResults(data.results || [])
       setTotalScreened(data.total_screened || 0)
       setScreeningDone(true)
@@ -84,6 +99,7 @@ export default function App() {
     setTotalScreened(0)
     setSelectedResult(null)
     setError(null)
+    setCacheInfo(null)
     setScreeningDone(false)
   }
 
@@ -175,6 +191,23 @@ export default function App() {
       }}>
 
         {/* Global error banner */}
+        {cacheInfo && !error && (
+          <div className="animate-fade-in" style={{
+            maxWidth: 760, margin: '0 auto 24px', padding: '0 24px',
+          }}>
+            <div style={{
+              background: 'var(--accent-light)',
+              border: '1px solid #9FD8D9',
+              borderRadius: 8,
+              padding: '12px 16px',
+              fontSize: 13,
+              color: 'var(--primary)',
+            }}>
+              {cacheInfo}
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="animate-fade-in" style={{
             maxWidth: 760, margin: '0 auto 24px', padding: '0 24px',
@@ -311,7 +344,8 @@ export default function App() {
             <div className="card-elevated" style={{ overflow: 'hidden' }}>
               <ScreeningLoader
                 condition={confirmedCondition}
-                maxTrials={20}
+                maxTrials={8}
+                totalScreened={screeningDone ? totalScreened : null}
                 isDone={screeningDone}
               />
             </div>

@@ -44,7 +44,7 @@ client = AsyncOpenAI(
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 
 
 # ---------------------------------------------------------------------------
