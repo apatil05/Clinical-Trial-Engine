@@ -70,3 +70,11 @@ export async function getQueue() {
 export async function getMatchResult(id) {
   return request(`/queue/${id}`)
 }
+
+/**
+ * Generate a fresh synthetic patient health summary via LLM.
+ * POST /generate-sample → { patient_text: string }
+ */
+export async function generateSamplePatient() {
+  return request('/generate-sample', { method: 'POST' })
+}

@@ -18,8 +18,15 @@ function ScoreBar({ score }) {
   )
 }
 
+function coveragePct(breakdown) {
+  if (!breakdown || breakdown.length === 0) return null
+  const evaluable = breakdown.filter(c => c.verdict !== 'UNCERTAIN').length
+  return Math.round((evaluable / breakdown.length) * 100)
+}
+
 function ResultRow({ result, rank, onClick }) {
   const statusCfg = STATUS_CONFIG[result.status] || STATUS_CONFIG.UNCERTAIN
+  const coverage = coveragePct(result.criteria_breakdown)
 
   return (
     <div
@@ -27,7 +34,7 @@ function ResultRow({ result, rank, onClick }) {
       onClick={onClick}
       style={{
         display: 'grid',
-        gridTemplateColumns: '32px 88px 1fr 20px',
+        gridTemplateColumns: '32px 88px 1fr 52px',
         alignItems: 'center',
         gap: 20,
         padding: '15px 20px',
@@ -65,16 +72,45 @@ function ResultRow({ result, rank, onClick }) {
         }}>
           {result.trial_title}
         </h3>
-        <p style={{
-          fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4,
-          overflow: 'hidden', textOverflow: 'ellipsis',
-          display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
-        }}>
-          {result.summary}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <p style={{
+            fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4,
+            overflow: 'hidden', textOverflow: 'ellipsis',
+            display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+            flex: 1,
+          }}>
+            {result.summary}
+          </p>
+          {coverage !== null && (
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 9, flexShrink: 0,
+              letterSpacing: '0.07em', whiteSpace: 'nowrap',
+              color: coverage >= 70 ? 'var(--eligible)' : coverage >= 40 ? 'var(--uncertain)' : 'var(--ineligible)',
+            }}>
+              {coverage}% DATA
+            </span>
+          )}
+        </div>
       </div>
 
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-hint)' }}>→</span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-hint)' }}>→</span>
+        <a
+          href={`https://clinicaltrials.gov/study/${result.nct_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          style={{
+            fontFamily: 'var(--font-mono)', fontSize: 8,
+            color: 'var(--accent)', letterSpacing: '0.07em',
+            textDecoration: 'none', borderBottom: '1px solid var(--accent)',
+            lineHeight: 1, paddingBottom: 1,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          CTGOV ↗
+        </a>
+      </div>
     </div>
   )
 }
@@ -139,7 +175,7 @@ export default function Queue({ results, totalScreened, condition, onSelectResul
       <div className="terminal-card">
         {/* Column headers */}
         <div style={{
-          display: 'grid', gridTemplateColumns: '32px 88px 1fr 20px',
+          display: 'grid', gridTemplateColumns: '32px 88px 1fr 52px',
           gap: 20, padding: '9px 20px',
           borderBottom: '1.5px solid var(--border-hard)',
           background: 'var(--surface-2)',

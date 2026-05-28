@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { generateSamplePatient } from '../api.js'
 
 const SYNTHETIC_NOTE_2 = `PATIENT HEALTH SUMMARY
 
@@ -121,11 +122,25 @@ function highlightMedical(raw) {
 export default function PatientInput({ onAnalyze, isLoading }) {
   const [notesText, setNotesText] = useState(SYNTHETIC_NOTE)
   const [activePatient, setActivePatient] = useState('gaucher')
+  const [isGenerating, setIsGenerating] = useState(false)
 
   function selectPatient(id) {
     setActivePatient(id)
     const patient = EXAMPLE_PATIENTS.find(p => p.id === id)
     setNotesText(patient.note ?? SYNTHETIC_NOTE)
+  }
+
+  async function handleGenerateSample() {
+    setIsGenerating(true)
+    setActivePatient(null)
+    try {
+      const data = await generateSamplePatient()
+      setNotesText(data.patient_text)
+    } catch {
+      // silently leave existing text on failure
+    } finally {
+      setIsGenerating(false)
+    }
   }
   const textareaRef = useRef(null)
   const highlightRef = useRef(null)
@@ -280,6 +295,28 @@ export default function PatientInput({ onAnalyze, isLoading }) {
                   {p.label}
                 </button>
               ))}
+
+              <div style={{ marginLeft: 'auto' }}>
+                <button
+                  onClick={handleGenerateSample}
+                  disabled={isGenerating}
+                  style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 9,
+                    letterSpacing: '0.06em', textTransform: 'uppercase',
+                    padding: '3px 10px',
+                    background: 'transparent',
+                    color: isGenerating ? 'var(--text-hint)' : 'var(--accent)',
+                    border: `1px solid ${isGenerating ? 'var(--border)' : 'var(--accent)'}`,
+                    cursor: isGenerating ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.12s',
+                    display: 'flex', alignItems: 'center', gap: 5,
+                  }}
+                >
+                  {isGenerating ? (
+                    <><span style={{ width: 7, height: 7, border: '1px solid var(--text-hint)', borderTopColor: 'var(--accent)', borderRadius: '50%', display: 'inline-block' }} className="animate-spin-slow" /> Generating...</>
+                  ) : '⚡ Generate Sample'}
+                </button>
+              </div>
             </div>
 
             {/* Highlighted textarea overlay */}
@@ -352,7 +389,10 @@ export default function PatientInput({ onAnalyze, isLoading }) {
           </div>
 
           <p style={{ marginTop: 11, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.05em', textAlign: 'right' }}>
-            // example loaded — gaucher disease patient, synthetic data
+            {activePatient === 'gaucher' && '// example loaded — gaucher disease patient, synthetic data'}
+            {activePatient === 'parkinson' && '// example loaded — parkinson disease patient, synthetic data'}
+            {activePatient === null && !isGenerating && '// ai-generated synthetic patient — not real data'}
+            {isGenerating && '// generating patient via llm...'}
           </p>
         </div>
       </div>

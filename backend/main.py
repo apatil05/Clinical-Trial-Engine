@@ -28,7 +28,7 @@ from models import (
     PatientProfile,
     TrialResult,
 )
-from extractor import extract_patient_profile, parse_trial_criteria
+from extractor import extract_patient_profile, parse_trial_criteria, generate_sample_patient
 from matcher import bulk_match
 from trials_fetcher import search_trials
 from persistence import (
@@ -72,6 +72,9 @@ def _in_memory_rows(
                 status=match_output.status,
                 summary=match_output.summary,
                 criteria_breakdown=match_output.criteria_breakdown,
+                contact_name=trial.contact_name,
+                contact_email=trial.contact_email,
+                contact_phone=trial.contact_phone,
             )
         )
     return rows
@@ -213,6 +216,17 @@ async def match(req: MatchRequest):
 
     except Exception as e:
         logger.error("Error in /match: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@app.post("/generate-sample")
+async def generate_sample():
+    """Generate a synthetic patient health summary using the LLM."""
+    try:
+        note = await generate_sample_patient()
+        return {"patient_text": note}
+    except Exception as e:
+        logger.error("Error in /generate-sample: %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 

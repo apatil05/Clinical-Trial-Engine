@@ -44,7 +44,9 @@ client = AsyncOpenAI(
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_DEFAULT = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_EXTRACT = os.getenv("NEBIUS_MODEL_EXTRACT", MODEL_DEFAULT)
+MODEL_PARSE = os.getenv("NEBIUS_MODEL_PARSE", MODEL_DEFAULT)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +91,7 @@ async def extract_patient_profile(raw_text: str) -> PatientProfile:
     prompt = PATIENT_EXTRACTION_PROMPT.replace("{patient_text}", raw_text)
 
     response = await client.chat.completions.create(
-        model=MODEL,
+        model=MODEL_EXTRACT,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
@@ -140,7 +142,7 @@ async def parse_trial_criteria(raw_criteria: str) -> ParsedCriteria:
     prompt = CRITERIA_PARSING_PROMPT.replace("{raw_criteria}", raw_criteria)
 
     response = await client.chat.completions.create(
-        model=MODEL,
+        model=MODEL_PARSE,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
@@ -156,3 +158,66 @@ async def parse_trial_criteria(raw_criteria: str) -> ParsedCriteria:
     inclusion = [ParsedCriterion(**c) for c in data.get("inclusion", [])]
     exclusion = [ParsedCriterion(**c) for c in data.get("exclusion", [])]
     return ParsedCriteria(inclusion=inclusion, exclusion=exclusion)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic patient generation
+# ---------------------------------------------------------------------------
+
+import random
+
+SAMPLE_CONDITIONS = [
+    "Fabry disease", "Pompe disease", "Niemann-Pick disease type C",
+    "amyotrophic lateral sclerosis", "multiple sclerosis (relapsing-remitting)",
+    "chronic lymphocytic leukemia", "diffuse large B-cell lymphoma",
+    "Crohn's disease", "systemic lupus erythematosus",
+    "pulmonary arterial hypertension", "idiopathic pulmonary fibrosis",
+    "myasthenia gravis", "Huntington disease",
+]
+
+SAMPLE_GENERATION_PROMPT = """You are a clinical documentation assistant. Generate a realistic, de-identified patient health summary for a patient with {condition}.
+
+Write it in the style of a physician's referral note or discharge summary — plain prose with structured sections. Use realistic but fictional demographics, lab values, medications, and clinical details.
+
+Format it exactly like this template (fill in realistic values):
+
+PATIENT HEALTH SUMMARY
+
+Patient: [First name + last initial]  |  Date of Birth: [Month DD, YYYY]  |  [Male/Female]  |  [City, State]
+
+PRESENTING COMPLAINT
+[2-3 sentences describing why they are presenting now and their interest in clinical trials]
+
+CONFIRMED DIAGNOSES
+[Bulleted list of diagnoses with dates and supporting evidence where appropriate]
+
+CURRENT MEDICATIONS
+[Bulleted list with doses and frequency]
+
+RECENT LABORATORY RESULTS ([Month YYYY])
+[Bulleted list of 5-8 relevant lab values with reference ranges where useful]
+
+DISEASE-SPECIFIC / FUNCTIONAL STATUS
+[3-5 lines with relevant functional scores, staging, imaging findings, or biomarkers for this condition]
+
+TREATMENT HISTORY
+[2-4 bullet points covering prior treatments and any notable history]
+
+CLINICAL NOTES
+[2-3 sentences covering ECOG status, allergies, lifestyle factors, willingness to travel for study]
+
+Return ONLY the patient health summary text. No preamble, no explanation."""
+
+
+async def generate_sample_patient() -> str:
+    """Generate a synthetic patient health summary for a random condition."""
+    condition = random.choice(SAMPLE_CONDITIONS)
+    prompt = SAMPLE_GENERATION_PROMPT.replace("{condition}", condition)
+
+    response = await client.chat.completions.create(
+        model=MODEL_EXTRACT,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.9,
+    )
+
+    return response.choices[0].message.content.strip()

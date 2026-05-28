@@ -56,6 +56,7 @@ class CriterionVerdict(BaseModel):
     type: str = Field(description="inclusion | exclusion")
     verdict: str = Field(description="ELIGIBLE | INELIGIBLE | UNCERTAIN")
     reason: str
+    contested: bool = Field(default=False, description="True when the two scoring passes disagreed on this criterion")
 
 
 class MatchOutput(BaseModel):
@@ -94,6 +95,9 @@ class TrialResult(BaseModel):
     phase: Optional[str] = None
     status: str
     raw_criteria: str
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
 
 
 class MatchResultRow(BaseModel):
@@ -107,6 +111,9 @@ class MatchResultRow(BaseModel):
     status: str
     summary: str
     criteria_breakdown: list[CriterionVerdict]
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
 
 
 class BulkMatchResponse(BaseModel):

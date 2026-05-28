@@ -116,10 +116,19 @@ def get_cached_parsed_criteria(nct_id: str) -> dict | None:
 
 
 def _match_output_from_row(row: dict, trial: TrialResult) -> MatchOutput:
+    """
+    Re-score cached rows using the current deterministic formula. The breakdown
+    is the source of truth; the stored score is ignored. This way, old cached
+    rows from before the penalty existed automatically display the corrected
+    score on next load — no cache wipe needed when the formula changes.
+    """
+    from matcher import compute_score_from_breakdown  # local import to avoid cycle
+
     breakdown = [CriterionVerdict(**v) for v in row.get("criteria_breakdown", [])]
+    score, status = compute_score_from_breakdown(breakdown)
     return MatchOutput(
-        overall_score=row["overall_score"],
-        status=row["status"],
+        overall_score=score,
+        status=status,
         summary=row.get("summary") or "",
         criteria_breakdown=breakdown,
     )
@@ -221,6 +230,9 @@ def persist_match_results(
                 status=match_output.status,
                 summary=match_output.summary,
                 criteria_breakdown=match_output.criteria_breakdown,
+                contact_name=trial.contact_name,
+                contact_email=trial.contact_email,
+                contact_phone=trial.contact_phone,
             )
         )
     return rows

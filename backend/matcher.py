@@ -8,6 +8,7 @@ UNCERTAIN is always preferred over INELIGIBLE when data is missing.
 """
 
 import os
+import random
 import asyncio
 import logging
 from openai import AsyncOpenAI
@@ -26,16 +27,30 @@ logger = logging.getLogger(__name__)
 
 # Tunable for hackathon demos — higher concurrency uses more Nebius credits, finishes faster.
 MAX_CRITERIA_CHARS = int(os.getenv("MAX_CRITERIA_CHARS", "6000"))
-MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "8"))
+# NOTE: each trial fires 2 LLM calls (dual-pass scoring), so effective concurrent
+# requests = MATCH_CONCURRENCY * 2. Nemotron 253B takes ~20s per call — keep this low
+# so we don't saturate Nebius's per-model capacity.
+MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "2"))
 DEFAULT_MAX_TRIALS = int(os.getenv("MAX_TRIALS", "8"))
 MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "2048"))
+# Retries per single-pass LLM call on transient failure (rate limits, timeouts).
+MATCH_RETRIES = int(os.getenv("MATCH_RETRIES", "3"))
+# Backoff (seconds) — rate limits need much longer waits than network blips.
+RATE_LIMIT_BACKOFF_BASE = 5.0
+TRANSIENT_BACKOFF_BASE = 0.6
+
+# Bump whenever scoring formula changes. If your demo shows stale scores, wipe match_results:
+#   DELETE FROM match_results;
+# v2: dual-pass + deterministic uncertainty penalty (-5 inc, -3 exc, -2 contested)
+SCORING_VERSION = 2
 
 client = AsyncOpenAI(
     api_key=os.environ["NEBIUS_API_KEY"],
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_DEFAULT = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_MATCH = os.getenv("NEBIUS_MODEL_MATCH", MODEL_DEFAULT)
 
 
 # ---------------------------------------------------------------------------
@@ -96,14 +111,19 @@ Evaluate up to 15 of the most important inclusion/exclusion criteria (prioritize
 
 
 # ---------------------------------------------------------------------------
-# Single match
+# Dual-pass matching: two concurrent LLM calls, reconciled into one verdict
 # ---------------------------------------------------------------------------
 
-async def match_patient_to_trial(
+async def _single_match_pass(
     patient: PatientProfile,
     trial: TrialResult,
+    temperature: float,
 ) -> MatchOutput:
-    """Run LLM matching for one patient vs one trial's raw eligibility text."""
+    """
+    One LLM scoring pass at the given temperature, with retry on transient errors.
+    Rate limits and network blips drop trials silently otherwise — the retry loop
+    matters more here than in extraction because dual-pass doubles the call count.
+    """
     raw_criteria = (trial.raw_criteria or "").strip()
     if len(raw_criteria) > MAX_CRITERIA_CHARS:
         raw_criteria = raw_criteria[:MAX_CRITERIA_CHARS] + "\n...[truncated for screening]"
@@ -114,31 +134,151 @@ async def match_patient_to_trial(
         .replace("{raw_criteria}", raw_criteria)
     )
 
-    response = await client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        max_tokens=MATCH_MAX_TOKENS,
+    last_error: Exception | None = None
+    for attempt in range(MATCH_RETRIES + 1):
+        try:
+            response = await client.chat.completions.create(
+                model=MODEL_MATCH,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=MATCH_MAX_TOKENS,
+            )
+            raw_json = response.choices[0].message.content.strip()
+            data = _parse_llm_json(raw_json)
+            breakdown = [CriterionVerdict(**v) for v in data.get("criteria_breakdown", [])]
+            return MatchOutput(
+                overall_score=data["overall_score"],
+                status=data["status"],
+                summary=data["summary"],
+                criteria_breakdown=breakdown,
+            )
+        except Exception as e:
+            last_error = e
+            if attempt >= MATCH_RETRIES:
+                logger.warning(
+                    "All %d retries exhausted for %s (temp=%.1f): %s",
+                    MATCH_RETRIES + 1, trial.nct_id, temperature, e,
+                )
+                raise last_error
+
+            # Rate limits need much longer waits than network blips. Jitter prevents
+            # both passes from retrying at the exact same moment and re-hitting the limit.
+            err_text = str(e).lower()
+            is_rate_limit = (
+                "rate" in err_text or "429" in err_text or "quota" in err_text
+                or e.__class__.__name__ == "RateLimitError"
+            )
+            base = RATE_LIMIT_BACKOFF_BASE if is_rate_limit else TRANSIENT_BACKOFF_BASE
+            delay = base * (2 ** attempt) + random.uniform(0, 1.0)
+            logger.info(
+                "Retry %d/%d for %s (temp=%.1f, %s, sleeping %.1fs): %s",
+                attempt + 1, MATCH_RETRIES, trial.nct_id, temperature,
+                "rate_limit" if is_rate_limit else "transient",
+                delay, e,
+            )
+            await asyncio.sleep(delay)
+
+
+def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int, str]:
+    """
+    Deterministic score formula — pure function of the criterion verdicts.
+    Called both when reconciling fresh LLM passes AND when loading cached results,
+    so the same penalty rules apply regardless of when the breakdown was generated.
+    No cache invalidation ever needed when the formula changes.
+
+    Per-criterion deltas (start at 100, all clamped to [0, 100]):
+      INELIGIBLE inclusion: -20  (patient fails a required criterion)
+      INELIGIBLE exclusion: -35  (patient triggers a disqualifying criterion)
+      UNCERTAIN  inclusion: -8   (can't confirm patient meets it)
+      UNCERTAIN  exclusion: -3   (can't confirm patient avoids it)
+      contested:            -2   (both LLM passes disagreed — extra doubt)
+      ELIGIBLE:              0   (no change — they met the criterion)
+    """
+    score = 100
+    for c in breakdown:
+        if c.verdict == "INELIGIBLE":
+            score -= 35 if c.type == "exclusion" else 20
+        elif c.verdict == "UNCERTAIN":
+            score -= 3 if c.type == "exclusion" else 8
+        if c.contested:
+            score -= 2
+
+    score = max(0, min(100, score))
+
+    has_ineligible_exclusion = any(
+        c.verdict == "INELIGIBLE" and c.type == "exclusion" for c in breakdown
     )
+    if has_ineligible_exclusion or score < 40:
+        status = "LIKELY_INELIGIBLE"
+    elif score >= 70:
+        status = "LIKELY_ELIGIBLE"
+    else:
+        status = "UNCERTAIN"
 
-    raw_json = response.choices[0].message.content.strip()
+    return score, status
 
-    try:
-        data = _parse_llm_json(raw_json)
-    except (ValueError, TypeError) as e:
-        logger.error(
-            "Matching JSON parse error for %s: %s\nRaw: %s",
-            trial.nct_id, e, raw_json,
-        )
-        raise ValueError(f"LLM returned invalid JSON for trial {trial.nct_id}: {e}")
 
-    breakdown = [CriterionVerdict(**v) for v in data.get("criteria_breakdown", [])]
+def _reconcile_passes(a: MatchOutput, b: MatchOutput) -> MatchOutput:
+    """
+    Merge two scoring passes into one breakdown, then compute the score
+    deterministically. Disagreements collapse to UNCERTAIN + contested=True.
+    """
+    b_by_id = {c.criterion_id: c for c in b.criteria_breakdown}
+
+    reconciled: list[CriterionVerdict] = []
+    for c_a in a.criteria_breakdown:
+        c_b = b_by_id.get(c_a.criterion_id)
+        if c_b is None or c_a.verdict == c_b.verdict:
+            reconciled.append(c_a)
+        else:
+            reconciled.append(CriterionVerdict(
+                criterion_id=c_a.criterion_id,
+                criterion_text=c_a.criterion_text,
+                type=c_a.type,
+                verdict="UNCERTAIN",
+                reason=f"Agents disagreed ({c_a.verdict} vs {c_b.verdict}) — insufficient data to confirm.",
+                contested=True,
+            ))
+
+    score, status = compute_score_from_breakdown(reconciled)
+
     return MatchOutput(
-        overall_score=data["overall_score"],
-        status=data["status"],
-        summary=data["summary"],
-        criteria_breakdown=breakdown,
+        overall_score=score,
+        status=status,
+        summary=a.summary,
+        criteria_breakdown=reconciled,
     )
+
+
+async def match_patient_to_trial(
+    patient: PatientProfile,
+    trial: TrialResult,
+) -> MatchOutput:
+    """
+    Run two concurrent LLM scoring passes and reconcile disagreements.
+    Tolerates one-pass failure: if both passes fail the trial drops, but if only
+    one fails the surviving pass is returned as-is (just no contested-flagging).
+    """
+    results = await asyncio.gather(
+        _single_match_pass(patient, trial, temperature=0.1),
+        _single_match_pass(patient, trial, temperature=0.5),
+        return_exceptions=True,
+    )
+    pass_a, pass_b = results
+
+    a_ok = isinstance(pass_a, MatchOutput)
+    b_ok = isinstance(pass_b, MatchOutput)
+
+    if a_ok and b_ok:
+        return _reconcile_passes(pass_a, pass_b)
+    if a_ok:
+        logger.info("Trial %s: pass B failed, returning pass A only", trial.nct_id)
+        return pass_a
+    if b_ok:
+        logger.info("Trial %s: pass A failed, returning pass B only", trial.nct_id)
+        return pass_b
+    # Both failed — re-raise so _match_one logs and drops this trial
+    raise pass_a if isinstance(pass_a, Exception) else pass_b
 
 
 # ---------------------------------------------------------------------------
