@@ -35,7 +35,8 @@ client = AsyncOpenAI(
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_DEFAULT = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_MATCH = os.getenv("NEBIUS_MODEL_MATCH", MODEL_DEFAULT)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ async def match_patient_to_trial(
     )
 
     response = await client.chat.completions.create(
-        model=MODEL,
+        model=MODEL_MATCH,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         max_tokens=MATCH_MAX_TOKENS,

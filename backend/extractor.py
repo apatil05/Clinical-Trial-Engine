@@ -44,7 +44,9 @@ client = AsyncOpenAI(
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_DEFAULT = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+MODEL_EXTRACT = os.getenv("NEBIUS_MODEL_EXTRACT", MODEL_DEFAULT)
+MODEL_PARSE = os.getenv("NEBIUS_MODEL_PARSE", MODEL_DEFAULT)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +91,7 @@ async def extract_patient_profile(raw_text: str) -> PatientProfile:
     prompt = PATIENT_EXTRACTION_PROMPT.replace("{patient_text}", raw_text)
 
     response = await client.chat.completions.create(
-        model=MODEL,
+        model=MODEL_EXTRACT,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
@@ -140,7 +142,7 @@ async def parse_trial_criteria(raw_criteria: str) -> ParsedCriteria:
     prompt = CRITERIA_PARSING_PROMPT.replace("{raw_criteria}", raw_criteria)
 
     response = await client.chat.completions.create(
-        model=MODEL,
+        model=MODEL_PARSE,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
