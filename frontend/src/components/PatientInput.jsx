@@ -40,6 +40,54 @@ No current or planned pregnancy — on hormonal contraception (oral).
 No known drug allergies.  BMI: 22.4 kg/m².  Blood type: O positive.
 Patient resides in Boston, MA and is willing to travel up to 200 miles for study.`
 
+const SYNTHETIC_NOTE_2 = `PATIENT HEALTH SUMMARY
+
+Patient: James R.  |  Date of Birth: August 3, 1958  |  Male  |  Cambridge, MA
+
+PRESENTING COMPLAINT
+Follow-up for idiopathic Parkinson disease. Reports worsening right-hand tremor, slower gait,
+and increased stiffness over the past 18 months. Interested in clinical trial options.
+
+CONFIRMED DIAGNOSES
+- Parkinson disease — clinically definite per MDS criteria (diagnosed June 2022)
+- Hypertension — controlled on lisinopril
+- Mild depressive symptoms — managed without SSRI (patient preference)
+
+CURRENT MEDICATIONS
+- Carbidopa/levodopa 25/100 mg — 1 tablet three times daily
+- Pramipexole 0.5 mg — three times daily
+- Lisinopril 10 mg — once daily
+
+RECENT LABORATORY RESULTS (April 2026)
+- Hemoglobin: 13.8 g/dL
+- Platelets: 210,000 /μL
+- Creatinine: 0.9 mg/dL
+- BUN: 14 mg/dL
+- ALT / AST: within normal limits
+- HbA1c: 5.6%
+
+NEUROLOGIC / FUNCTIONAL STATUS
+- Hoehn and Yahr stage: 2.5
+- UPDRS Part III (motor, on medication): 28
+- MoCA: 26/30 (mild executive slowing, no dementia)
+- ECOG performance status: 1
+- Ambulatory without assistive device; occasional freezing episodes on turning
+
+TREATMENT HISTORY
+- No prior deep brain stimulation
+- No prior gene therapy or cell therapy
+- No participation in interventional clinical trials in the past 12 months
+
+CLINICAL NOTES
+Non-smoker. No known drug allergies. No active psychosis or substance use disorder.
+Not pregnant (male patient). Lives with spouse; reliable study companion available.
+Willing to travel within 100 miles of Boston for trial visits.`
+
+const EXAMPLE_PATIENTS = [
+  { id: 'gaucher', label: 'Gaucher (Sarah)', note: SYNTHETIC_NOTE },
+  { id: 'parkinson', label: 'Parkinson (James)', note: SYNTHETIC_NOTE_2 },
+]
+
 const FHIR_PLACEHOLDER = `{
   "resourceType": "Bundle",
   "type": "collection",
@@ -152,14 +200,17 @@ export default function PatientInput({ onAnalyze, isLoading }) {
                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                   Paste discharge summaries, lab results, or doctor's notes
                 </p>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    className="btn-ghost"
-                    onClick={() => setNotesText(SYNTHETIC_NOTE)}
-                    style={{ fontSize: 12 }}
-                  >
-                    Load Example
-                  </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {EXAMPLE_PATIENTS.map(example => (
+                    <button
+                      key={example.id}
+                      className="btn-ghost"
+                      onClick={() => setNotesText(example.note)}
+                      style={{ fontSize: 12 }}
+                    >
+                      {example.label}
+                    </button>
+                  ))}
                   <button
                     className="btn-ghost"
                     onClick={() => setNotesText('')}
