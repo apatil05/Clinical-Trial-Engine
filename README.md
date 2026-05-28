@@ -249,5 +249,5 @@ This tool is a **clinical decision-support system**. Every result is intended to
 
 ---
 
-Built by **Aryan Patil** in collaboration with **C10 Labs** · **LabCentral** · **Bayer Co.Lab** · **Evolved Technology**
+Built by **Aryan Patil** and **Tyler Sheehan** in collaboration with **C10 Labs** · **LabCentral** · **Bayer Co.Lab** · **Evolved Technology**
 Compute provided by **Nebius AI Studio** · Part of [Boston Tech Week 2026](https://www.tech-week.com)
