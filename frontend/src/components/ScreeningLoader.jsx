@@ -1,162 +1,141 @@
 import { useState, useEffect } from 'react'
 
-/**
- * ScreeningLoader — animated loading state shown during bulk trial matching.
- * Fakes a per-trial progress counter that animates over ~20s,
- * then snaps to 100% when real results arrive.
- */
-export default function ScreeningLoader({ condition, maxTrials = 20, isDone = false }) {
-  const [screened, setScreened] = useState(0)
-  const [phase, setPhase] = useState('searching') // 'searching' | 'matching' | 'done'
-  const [dots, setDots] = useState('')
+export default function ScreeningLoader({
+  condition,
+  maxTrials = 8,
+  totalScreened = null,
+  isDone = false,
+}) {
+  const [screened, setScreened]   = useState(0)
+  const [phase, setPhase]         = useState('fetching')
+  const [logLines, setLogLines]   = useState([`> CONDITION: "${condition}"`])
 
-  // Animated ellipsis
-  useEffect(() => {
-    const id = setInterval(() => {
-      setDots(d => d.length >= 3 ? '' : d + '.')
-    }, 400)
-    return () => clearInterval(id)
-  }, [])
+  const targetTotal = totalScreened ?? maxTrials
 
-  // Fake progress: 0 → maxTrials over ~20s, accelerating then slowing
   useEffect(() => {
     if (isDone) {
-      setScreened(maxTrials)
+      setScreened(targetTotal)
       setPhase('done')
+      setLogLines(prev => [
+        ...prev,
+        `> SCREENING COMPLETE — ${targetTotal}/${targetTotal} TRIALS EVALUATED`,
+        '> RANKING BY ELIGIBILITY SCORE...',
+        '> DONE ✓',
+      ])
       return
     }
 
-    // Phase 1: searching (0-2s)
-    const searchTimer = setTimeout(() => setPhase('matching'), 2000)
+    // Reset on new run
+    setScreened(0)
+    setPhase('fetching')
+    setLogLines([`> CONDITION: "${condition}"`])
 
-    // Phase 2: counting up trials
+    const timeouts = []
+    const push = (fn, ms) => timeouts.push(setTimeout(fn, ms))
+
+    push(() => setLogLines(prev => [...prev, '> SEARCHING CLINICALTRIALS.GOV...']), 400)
+    push(() => setLogLines(prev => [...prev, '> STATUS: 200 OK']), 1000)
+    push(() => {
+      setLogLines(prev => [...prev, `> TRIALS_FOUND: ${maxTrials}`])
+      setPhase('matching')
+    }, 1600)
+    push(() => setLogLines(prev => [...prev, '> INITIALIZING ELIGIBILITY ENGINE...']), 2200)
+
+    // Count up and emit a log line per trial
     let count = 0
-    const interval = setInterval(() => {
-      if (count >= maxTrials - 1) {
-        clearInterval(interval)
-        return
-      }
-      // Variable speed: fast start, slow finish
-      const progress = count / maxTrials
-      const delay = progress < 0.6 ? 600 : 1200
+    const countId = setInterval(() => {
       count++
-      setScreened(count)
-    }, 750)
+      if (count > maxTrials) { clearInterval(countId); return }
+      const n = count
+      setScreened(n)
+      setLogLines(prev => [
+        ...prev.slice(-14),
+        `> TRIAL_${String(n).padStart(2, '0')}: CRITERIA_PARSED — SCORING ELIGIBILITY...`,
+      ])
+    }, 550)
 
     return () => {
-      clearTimeout(searchTimer)
-      clearInterval(interval)
+      timeouts.forEach(clearTimeout)
+      clearInterval(countId)
     }
-  }, [isDone, maxTrials])
+  }, [isDone, maxTrials, targetTotal, condition])
 
-  const progressPct = isDone ? 100 : Math.round((screened / maxTrials) * 100)
+  const progressPct = isDone ? 100 : Math.min(100, Math.round((screened / maxTrials) * 100))
+
+  const stages = [
+    { key: 'FETCH_TRIALS',      done: phase !== 'fetching' || isDone },
+    { key: 'PARSE_CRITERIA',    done: phase === 'matching'  || isDone },
+    { key: 'SCORE_ELIGIBILITY', done: isDone },
+  ]
 
   return (
-    <div
-      className="animate-fade-in"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 480,
-        padding: '40px 24px',
-        textAlign: 'center',
-      }}
-    >
-      {/* Animated orb */}
-      <div
-        style={{
-          width: 72, height: 72, borderRadius: '50%',
-          background: 'linear-gradient(135deg, var(--accent-light) 0%, var(--primary-light) 100%)',
-          border: '2px solid var(--accent)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          marginBottom: 32,
-          fontSize: 28,
-        }}
-        className={isDone ? '' : 'animate-pulse-ring'}
-      >
-        {isDone ? '✓' : '🔬'}
+    <div className="terminal-card animate-fade-in">
+      {/* Header */}
+      <div style={{
+        background: 'var(--surface-2)',
+        borderBottom: '1.5px solid var(--border-hard)',
+        padding: '10px 16px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+          SCREENING_ENGINE · {isDone ? 'COMPLETE' : 'RUNNING'}
+        </span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: isDone ? 'var(--eligible)' : 'var(--accent)', letterSpacing: '0.06em' }}>
+          {screened}/{targetTotal}
+        </span>
       </div>
 
-      {/* Status headline */}
-      <h2
-        className="font-display"
-        style={{ fontSize: 28, fontWeight: 600, color: 'var(--text)', marginBottom: 10 }}
-      >
-        {isDone
-          ? 'Screening Complete'
-          : phase === 'searching'
-          ? `Searching ClinicalTrials.gov${dots}`
-          : `Screening Trials${dots}`}
-      </h2>
+      {/* Log output */}
+      <div style={{
+        padding: '20px',
+        minHeight: 260,
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12,
+        lineHeight: 1.85,
+        color: 'var(--text-muted)',
+        overflow: 'hidden',
+      }}>
+        {logLines.map((line, i) => (
+          <div key={i} style={{
+            color:
+              line.includes('COMPLETE') || line.includes('DONE') ? 'var(--eligible)' :
+              line.includes('ERROR')    ? 'var(--ineligible)' :
+              line.includes('STATUS')  || line.includes('FOUND') ? 'var(--accent)' :
+              'var(--text-muted)',
+          }}>
+            {line}
+          </div>
+        ))}
+        {!isDone && <span className="cursor-blink" />}
+      </div>
 
-      <p style={{ fontSize: 15, color: 'var(--text-muted)', marginBottom: 36, lineHeight: 1.6 }}>
-        {isDone
-          ? `Screened ${maxTrials} trials for ${condition}. Showing your top matches.`
-          : phase === 'searching'
-          ? `Finding active recruiting trials for "${condition}"`
-          : `Analyzing your eligibility for each trial`}
-      </p>
-
-      {/* Progress bar */}
-      <div style={{ width: '100%', maxWidth: 420, marginBottom: 14 }}>
-        <div style={{
-          height: 6,
-          background: 'var(--border)',
-          borderRadius: 99,
-          overflow: 'hidden',
-        }}>
+      {/* Progress bar + stage indicators */}
+      <div style={{ padding: '0 20px 20px' }}>
+        <div style={{ height: 3, background: 'var(--border)', marginBottom: 12 }}>
           <div style={{
             height: '100%',
             width: `${progressPct}%`,
-            background: isDone
-              ? 'var(--eligible)'
-              : 'linear-gradient(90deg, var(--primary) 0%, var(--accent) 100%)',
-            borderRadius: 99,
-            transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)',
+            background: isDone ? 'var(--eligible)' : 'var(--accent)',
+            transition: 'width 0.6s cubic-bezier(0.4,0,0.2,1)',
           }} />
         </div>
-      </div>
 
-      {/* Counter */}
-      {phase !== 'searching' && (
-        <p
-          className="font-mono"
-          style={{ fontSize: 13, color: 'var(--text-muted)' }}
-        >
-          {isDone
-            ? `${maxTrials} / ${maxTrials} trials screened`
-            : `${screened} / ${maxTrials} trials screened`}
-        </p>
-      )}
-
-      {/* Steps */}
-      <div style={{
-        display: 'flex', gap: 28, marginTop: 44,
-        fontSize: 12, color: 'var(--text-hint)',
-      }}>
-        {[
-          { label: 'Extract profile',   done: true },
-          { label: 'Search trials',     done: phase !== 'searching' || isDone },
-          { label: 'Score eligibility', done: isDone },
-        ].map((s, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{
-              width: 16, height: 16, borderRadius: '50%',
-              background: s.done ? 'var(--eligible)' : 'var(--border)',
-              color: s.done ? '#fff' : 'transparent',
-              fontSize: 9, fontWeight: 700,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 0.4s',
-            }}>
-              {s.done ? '✓' : ''}
-            </span>
-            <span style={{ color: s.done ? 'var(--text-mid)' : 'var(--text-hint)' }}>
-              {s.label}
-            </span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 18 }}>
+            {stages.map(s => (
+              <span key={s.key} style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 9, letterSpacing: '0.07em',
+                color: s.done ? 'var(--text-mid)' : 'var(--text-hint)',
+              }}>
+                {s.done ? '▶' : '○'} {s.key}
+              </span>
+            ))}
           </div>
-        ))}
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.06em' }}>
+            {progressPct}%
+          </span>
+        </div>
       </div>
     </div>
   )

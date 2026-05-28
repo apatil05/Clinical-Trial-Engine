@@ -79,7 +79,11 @@ class MatchRequest(BaseModel):
         default=None,
         description="Patient-confirmed condition after extraction step"
     )
-    max_trials: int = Field(default=20, ge=1, le=30)
+    extracted_profile: Optional[PatientProfile] = Field(
+        default=None,
+        description="Profile from POST /extract — skips duplicate extraction when provided"
+    )
+    max_trials: int = Field(default=8, ge=1, le=30)
 
 
 class TrialResult(BaseModel):
@@ -111,3 +115,8 @@ class BulkMatchResponse(BaseModel):
     extracted_profile: PatientProfile
     total_screened: int
     results: list[MatchResultRow]
+    persisted_to_db: bool = True
+    db_message: Optional[str] = None
+    cache_hits: int = 0
+    llm_calls: int = 0
+    patient_reused: bool = False

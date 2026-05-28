@@ -1,4 +1,51 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+
+const SYNTHETIC_NOTE_2 = `PATIENT HEALTH SUMMARY
+
+Patient: James R.  |  Date of Birth: August 3, 1958  |  Male  |  Cambridge, MA
+
+PRESENTING COMPLAINT
+Follow-up for idiopathic Parkinson disease. Reports worsening right-hand tremor, slower gait,
+and increased stiffness over the past 18 months. Interested in clinical trial options.
+
+CONFIRMED DIAGNOSES
+- Parkinson disease — clinically definite per MDS criteria (diagnosed June 2022)
+- Hypertension — controlled on lisinopril
+- Mild depressive symptoms — managed without SSRI (patient preference)
+
+CURRENT MEDICATIONS
+- Carbidopa/levodopa 25/100 mg — 1 tablet three times daily
+- Pramipexole 0.5 mg — three times daily
+- Lisinopril 10 mg — once daily
+
+RECENT LABORATORY RESULTS (April 2026)
+- Hemoglobin: 13.8 g/dL
+- Platelets: 210,000 /μL
+- Creatinine: 0.9 mg/dL
+- ALT / AST: within normal limits
+- HbA1c: 5.6%
+
+NEUROLOGIC / FUNCTIONAL STATUS
+- Hoehn and Yahr stage: 2.5
+- UPDRS Part III (motor, on medication): 28
+- MoCA: 26/30 (mild executive slowing, no dementia)
+- ECOG performance status: 1
+- Ambulatory without assistive device; occasional freezing episodes on turning
+
+TREATMENT HISTORY
+- No prior deep brain stimulation
+- No prior gene therapy or cell therapy
+- No participation in interventional clinical trials in the past 12 months
+
+CLINICAL NOTES
+Non-smoker. No known drug allergies. No active psychosis or substance use disorder.
+Lives with spouse; reliable study companion available.
+Willing to travel within 100 miles of Boston for trial visits.`
+
+const EXAMPLE_PATIENTS = [
+  { id: 'gaucher',   label: 'Gaucher — Sarah',   note: null },
+  { id: 'parkinson', label: 'Parkinson — James',  note: SYNTHETIC_NOTE_2 },
+]
 
 const SYNTHETIC_NOTE = `PATIENT HEALTH SUMMARY
 
@@ -32,261 +79,283 @@ RECENT LABORATORY RESULTS (March 2026)
 TREATMENT HISTORY
 - No prior gene therapy
 - No prior stem cell or bone marrow transplant
-- Alglucerase (Ceredase) used approximately 1997–2001 per older records
 
 CLINICAL NOTES
 ECOG performance status: 1 (ambulatory, restricted in strenuous activity only)
-No current or planned pregnancy — on hormonal contraception (oral).
-No known drug allergies.  BMI: 22.4 kg/m².  Blood type: O positive.
-Patient resides in Boston, MA and is willing to travel up to 200 miles for study.`
+No current or planned pregnancy. No known drug allergies.
+BMI: 22.4 kg/m². Blood type: O positive.
+Patient willing to travel up to 200 miles for study.`
 
-const FHIR_PLACEHOLDER = `{
-  "resourceType": "Bundle",
-  "type": "collection",
-  "entry": [
-    {
-      "resource": {
-        "resourceType": "Patient",
-        "birthDate": "1992-03-14",
-        "gender": "female"
-      }
-    },
-    {
-      "resource": {
-        "resourceType": "Condition",
-        "code": {
-          "coding": [{
-            "system": "http://snomed.info/sct",
-            "code": "190905008",
-            "display": "Gaucher disease"
-          }]
-        }
-      }
-    }
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function highlightMedical(raw) {
+  let result = escapeHtml(raw)
+
+  const terms = [
+    'gaucher disease', 'splenomegaly', 'thrombocytopenia', 'anemia',
+    'imiglucerase', 'cerezyme', 'chitotriosidase', 'glucocerebrosidase',
+    'enzyme replacement therapy', 'gene therapy', 'stem cell',
+    'ferrous sulfate', 'cancer', 'tumor', 'carcinoma', 'lymphoma',
+    'leukemia', 'diabetes', 'hypertension', 'mutation', 'deletion', 'ferritin',
+    'parkinson disease', 'parkinson', 'levodopa', 'carbidopa', 'pramipexole',
+    'lisinopril', 'deep brain stimulation', 'tremor',
   ]
-}`
+  terms.forEach(term => {
+    const r = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    result = result.replace(r, m => `<span class="hi-term">${m}</span>`)
+  })
+
+  result = result.replace(
+    /(\b\d[\d,]*\.?\d*\s*(?:g\/dL|\/μL|ng\/mL|nmol\/hr\/mg|nmol\/hr\/mL|U\/kg|mg\/m²|mg|mL|%)\b)/g,
+    '<span class="hi-val">$1</span>'
+  )
+
+  return result
+}
 
 export default function PatientInput({ onAnalyze, isLoading }) {
-  const [activeTab, setActiveTab] = useState('notes')
   const [notesText, setNotesText] = useState(SYNTHETIC_NOTE)
-  const [fhirText, setFhirText] = useState('')
+  const [activePatient, setActivePatient] = useState('gaucher')
 
-  const charCount = activeTab === 'notes' ? notesText.length : fhirText.length
+  function selectPatient(id) {
+    setActivePatient(id)
+    const patient = EXAMPLE_PATIENTS.find(p => p.id === id)
+    setNotesText(patient.note ?? SYNTHETIC_NOTE)
+  }
+  const textareaRef = useRef(null)
+  const highlightRef = useRef(null)
 
-  function handleSubmit() {
-    if (activeTab === 'notes' && notesText.trim()) {
-      onAnalyze(notesText.trim())
+  const wordCount = notesText.trim() ? notesText.trim().split(/\s+/).length : 0
+
+  const sharedTextStyle = {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12.5px',
+    lineHeight: '1.75',
+    padding: '16px',
+    letterSpacing: '0.01em',
+    whiteSpace: 'pre-wrap',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
+  }
+
+  function syncScroll() {
+    if (highlightRef.current && textareaRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop
     }
   }
 
+  function handleSubmit() {
+    if (notesText.trim()) onAnalyze(notesText.trim())
+  }
+
   return (
-    <div className="animate-fade-up" style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
+    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '80px 40px 0' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1.1fr',
+        gap: 72,
+        alignItems: 'start',
+      }}>
 
-      {/* Hero text */}
-      <div style={{ textAlign: 'center', marginBottom: 40 }}>
-        <h1
-          className="font-display"
-          style={{ fontSize: 42, fontWeight: 600, color: 'var(--text)', lineHeight: 1.15, marginBottom: 14 }}
-        >
-          Find Your Clinical Trial Match
-        </h1>
-        <p style={{ fontSize: 16, color: 'var(--text-muted)', lineHeight: 1.65, maxWidth: 520, margin: '0 auto' }}>
-          Paste your medical records or doctor's notes below. Our AI will analyze
-          your health profile and match you to the trials you're most likely to qualify for.
-        </p>
-      </div>
+        {/* LEFT — Instructions */}
+        <div className="animate-fade-up">
+          <p style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10, color: 'var(--text-muted)',
+            letterSpacing: '0.12em', textTransform: 'uppercase',
+            marginBottom: 32,
+          }}>
+            Clinical Trial Matching Engine V1.0
+          </p>
 
-      {/* Card */}
-      <div className="card-elevated" style={{ overflow: 'hidden' }}>
-
-        {/* Tabs */}
-        <div style={{
-          display: 'flex',
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--surface-2)',
-        }}>
-          {[
-            { id: 'notes', label: 'Clinical Notes', icon: '📋' },
-            { id: 'fhir',  label: 'FHIR JSON',      icon: '⚕️' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                padding: '14px 24px',
-                background: activeTab === tab.id ? 'var(--surface)' : 'transparent',
-                border: 'none',
-                borderBottom: activeTab === tab.id ? '2px solid var(--primary)' : '2px solid transparent',
-                color: activeTab === tab.id ? 'var(--primary)' : 'var(--text-muted)',
-                fontFamily: 'var(--font-body)',
-                fontSize: 14,
-                fontWeight: 500,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 7,
-                marginBottom: '-1px',
-              }}
-            >
-              <span style={{ fontSize: 15 }}>{tab.icon}</span>
-              {tab.label}
-              {tab.id === 'fhir' && (
-                <span
-                  className="badge badge-accent"
-                  style={{ fontSize: 9, padding: '2px 7px', marginLeft: 2 }}
-                >
-                  COMING SOON
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 28, marginBottom: 48 }}>
+            {[
+              {
+                n: '01',
+                head: 'Paste your health records.',
+                body: "Doctor's notes, lab results, discharge summaries — doesn't need to be clean. The messier the better, honestly.",
+              },
+              {
+                n: '02',
+                head: 'We figure out your condition.',
+                body: 'AI reads through and extracts a structured profile. You confirm it before anything else runs.',
+              },
+              {
+                n: '03',
+                head: 'Your profile gets screened.',
+                body: `We pull active recruiting trials from ClinicalTrials.gov and run your profile against each one. Takes ~30 seconds.`,
+              },
+              {
+                n: '04',
+                head: 'You get your matches.',
+                body: 'Top trials ranked by eligibility score, with a full criterion-by-criterion breakdown for each.',
+              },
+            ].map(step => (
+              <div key={step.n} style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                <span style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11, color: 'var(--accent)',
+                  letterSpacing: '0.06em', flexShrink: 0,
+                  marginTop: 2,
+                }}>
+                  {step.n}
                 </span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div style={{ padding: '24px 24px 20px' }}>
-          {activeTab === 'notes' ? (
-            <>
-              {/* Actions row */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                  Paste discharge summaries, lab results, or doctor's notes
-                </p>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    className="btn-ghost"
-                    onClick={() => setNotesText(SYNTHETIC_NOTE)}
-                    style={{ fontSize: 12 }}
-                  >
-                    Load Example
-                  </button>
-                  <button
-                    className="btn-ghost"
-                    onClick={() => setNotesText('')}
-                    style={{ fontSize: 12 }}
-                  >
-                    Clear
-                  </button>
+                <div>
+                  <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)', marginBottom: 4 }}>
+                    {step.head}
+                  </p>
+                  <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.65, fontWeight: 300 }}>
+                    {step.body}
+                  </p>
                 </div>
               </div>
+            ))}
+          </div>
 
-              {/* Textarea */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {['De-identified locally', 'ClinicalTrials.gov sourced', 'No account needed'].map(label => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span className="status-dot status-dot-green" />
+                <span style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 9, color: 'var(--text-muted)',
+                  letterSpacing: '0.09em', textTransform: 'uppercase',
+                }}>
+                  {label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* RIGHT — Terminal input card */}
+        <div className="animate-fade-up" style={{ animationDelay: '100ms' }}>
+          <div className="terminal-card">
+
+            {/* Header bar */}
+            <div style={{
+              background: 'var(--surface-2)',
+              borderBottom: '1.5px solid var(--border-hard)',
+              padding: '10px 16px',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                INPUT_SOURCE: MEDICAL_NOTES.TXT
+              </span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.06em' }}>
+                {wordCount} WORDS
+              </span>
+            </div>
+
+            {/* Patient selector */}
+            <div style={{
+              borderBottom: '1px solid var(--border)',
+              padding: '7px 16px',
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: 'var(--surface)',
+            }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-hint)', letterSpacing: '0.08em', marginRight: 8 }}>
+                EXAMPLE:
+              </span>
+              {EXAMPLE_PATIENTS.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => selectPatient(p.id)}
+                  style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 9,
+                    letterSpacing: '0.06em', textTransform: 'uppercase',
+                    padding: '3px 10px',
+                    background: activePatient === p.id ? 'var(--accent)' : 'transparent',
+                    color: activePatient === p.id ? 'var(--surface)' : 'var(--text-muted)',
+                    border: `1px solid ${activePatient === p.id ? 'var(--accent-dark)' : 'var(--border)'}`,
+                    cursor: 'pointer',
+                    transition: 'all 0.12s',
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Highlighted textarea overlay */}
+            <div style={{ position: 'relative', height: 440, overflow: 'hidden' }}>
+              {/* Highlight layer (behind) */}
+              <div
+                ref={highlightRef}
+                aria-hidden="true"
+                style={{
+                  ...sharedTextStyle,
+                  position: 'absolute', inset: 0,
+                  overflow: 'hidden',
+                  pointerEvents: 'none',
+                  color: 'var(--text)',
+                  zIndex: 0,
+                }}
+                dangerouslySetInnerHTML={{ __html: highlightMedical(notesText) + '\n' }}
+              />
+              {/* Transparent textarea (on top for input) */}
               <textarea
+                ref={textareaRef}
                 value={notesText}
                 onChange={e => setNotesText(e.target.value)}
+                onScroll={syncScroll}
                 placeholder="Paste your medical records here..."
-                rows={16}
                 style={{
-                  fontFamily: 'var(--font-body)',
-                  fontSize: 13.5,
-                  lineHeight: 1.7,
-                  resize: 'vertical',
-                  background: 'var(--surface)',
-                }}
-              />
-
-              {/* Character count */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-hint)', fontFamily: 'var(--font-mono)' }}>
-                  {charCount.toLocaleString()} characters
-                </span>
-              </div>
-            </>
-          ) : (
-            /* FHIR stub */
-            <div style={{ position: 'relative' }}>
-              <textarea
-                value={fhirText}
-                onChange={e => setFhirText(e.target.value)}
-                placeholder={FHIR_PLACEHOLDER}
-                rows={16}
-                disabled
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12.5,
-                  lineHeight: 1.65,
-                  opacity: 0.45,
-                  cursor: 'not-allowed',
+                  ...sharedTextStyle,
+                  position: 'absolute', inset: 0,
+                  width: '100%', height: '100%',
+                  background: 'transparent',
+                  color: 'transparent',
+                  caretColor: 'var(--text)',
+                  border: 'none', outline: 'none',
                   resize: 'none',
+                  zIndex: 1,
+                  overflow: 'auto',
                 }}
               />
-              {/* Overlay */}
-              <div style={{
-                position: 'absolute', inset: 0,
-                background: 'rgba(244,246,250,0.7)',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center',
-                gap: 10, borderRadius: 8,
-                backdropFilter: 'blur(1px)',
-              }}>
-                <div style={{
-                  width: 48, height: 48, borderRadius: '50%',
-                  background: 'var(--accent-light)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 22,
-                }}>⚕️</div>
-                <div style={{ textAlign: 'center' }}>
-                  <p style={{ fontWeight: 600, color: 'var(--text-mid)', fontSize: 15, marginBottom: 4 }}>
-                    FHIR R4 Import
-                  </p>
-                  <p style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 320, lineHeight: 1.5 }}>
-                    Export from Apple Health or your EHR and paste your FHIR R4 bundle here.
-                    Available in the next release.
-                  </p>
-                </div>
-              </div>
             </div>
-          )}
-        </div>
 
-        {/* Footer */}
-        <div style={{
-          padding: '16px 24px',
-          borderTop: '1px solid var(--border-soft)',
-          background: 'var(--surface-2)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 16,
-        }}>
-          <p style={{ fontSize: 12, color: 'var(--text-hint)', lineHeight: 1.5, maxWidth: 420 }}>
-            All information is processed securely. Demo uses synthetic data only.
-            No real patient records are stored.
+            {/* Footer bar */}
+            <div style={{
+              borderTop: '1.5px solid var(--border-hard)',
+              background: 'var(--surface-2)',
+              padding: '11px 16px',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                {[['FHIR', false], ['PDF', false], ['Plain Text', true]].map(([fmt, active]) => (
+                  <span key={fmt} style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 9, color: active ? 'var(--accent)' : 'var(--text-hint)',
+                    letterSpacing: '0.08em', textTransform: 'uppercase',
+                  }}>
+                    {fmt}
+                  </span>
+                ))}
+              </div>
+              <button
+                className="btn-accent"
+                onClick={handleSubmit}
+                disabled={isLoading || !notesText.trim()}
+                style={{ padding: '9px 18px', fontSize: 11 }}
+              >
+                {isLoading ? (
+                  <><span style={{ width: 11, height: 11, border: '1.5px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block' }} className="animate-spin-slow" /> Analyzing</>
+                ) : 'Analyze →'}
+              </button>
+            </div>
+          </div>
+
+          <p style={{ marginTop: 11, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.05em', textAlign: 'right' }}>
+            // example loaded — gaucher disease patient, synthetic data
           </p>
-          <button
-            className="btn-primary"
-            onClick={handleSubmit}
-            disabled={isLoading || activeTab === 'fhir' || !notesText.trim()}
-            style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-          >
-            {isLoading ? (
-              <>
-                <span
-                  style={{
-                    width: 14, height: 14,
-                    border: '2px solid rgba(255,255,255,0.3)',
-                    borderTopColor: '#fff',
-                    borderRadius: '50%',
-                    display: 'inline-block',
-                  }}
-                  className="animate-spin-slow"
-                />
-                Analyzing…
-              </>
-            ) : (
-              <>
-                Analyze My Information
-                <span style={{ fontSize: 16 }}>→</span>
-              </>
-            )}
-          </button>
         </div>
       </div>
-
-      {/* Powered by note */}
-      <p style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text-hint)' }}>
-        Powered by Llama 3.1 70B via Nebius · Data from ClinicalTrials.gov
-      </p>
     </div>
   )
 }

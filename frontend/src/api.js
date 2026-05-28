@@ -34,12 +34,13 @@ export async function extractProfile(patientText) {
  * Run the full pipeline: extract → search trials → bulk match → save → return top 10.
  * POST /match → BulkMatchResponse
  */
-export async function runBulkMatch(patientText, confirmedCondition, maxTrials = 20) {
+export async function runBulkMatch(patientText, confirmedCondition, extractedProfile = null, maxTrials = 8) {
   return request('/match', {
     method: 'POST',
     body: JSON.stringify({
       patient_text: patientText,
       confirmed_condition: confirmedCondition,
+      extracted_profile: extractedProfile,
       max_trials: maxTrials,
     }),
   })

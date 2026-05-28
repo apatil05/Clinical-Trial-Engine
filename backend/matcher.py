@@ -8,7 +8,6 @@ UNCERTAIN is always preferred over INELIGIBLE when data is missing.
 """
 
 import os
-import json
 import asyncio
 import logging
 from openai import AsyncOpenAI
@@ -16,22 +15,27 @@ from dotenv import load_dotenv
 from models import (
     PatientProfile,
     TrialResult,
-    ParsedCriteria,
     MatchOutput,
     CriterionVerdict,
 )
-from extractor import parse_trial_criteria, _parse_llm_json
+from extractor import _parse_llm_json
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Tunable for hackathon demos — higher concurrency uses more Nebius credits, finishes faster.
+MAX_CRITERIA_CHARS = int(os.getenv("MAX_CRITERIA_CHARS", "6000"))
+MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "8"))
+DEFAULT_MAX_TRIALS = int(os.getenv("MAX_TRIALS", "8"))
+MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "2048"))
 
 client = AsyncOpenAI(
     api_key=os.environ["NEBIUS_API_KEY"],
     base_url="https://api.studio.nebius.ai/v1/",
 )
 
-MODEL = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+MODEL = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 
 
 # ---------------------------------------------------------------------------
@@ -85,8 +89,10 @@ Patient profile (JSON):
 
 ---
 
-Trial eligibility criteria:
-{criteria_json}"""
+Trial eligibility criteria (raw text):
+{raw_criteria}
+
+Evaluate up to 15 of the most important inclusion/exclusion criteria (prioritize disqualifying rules)."""
 
 
 # ---------------------------------------------------------------------------
@@ -96,34 +102,30 @@ Trial eligibility criteria:
 async def match_patient_to_trial(
     patient: PatientProfile,
     trial: TrialResult,
-    parsed_criteria: ParsedCriteria,
 ) -> MatchOutput:
-    """Run LLM matching for one patient vs one trial's parsed criteria."""
-    criteria_json = json.dumps(
-        {
-            "inclusion": [c.dict() for c in parsed_criteria.inclusion],
-            "exclusion": [c.dict() for c in parsed_criteria.exclusion],
-        },
-        indent=2,
-    )
+    """Run LLM matching for one patient vs one trial's raw eligibility text."""
+    raw_criteria = (trial.raw_criteria or "").strip()
+    if len(raw_criteria) > MAX_CRITERIA_CHARS:
+        raw_criteria = raw_criteria[:MAX_CRITERIA_CHARS] + "\n...[truncated for screening]"
 
     prompt = (
         MATCHING_PROMPT
-        .replace("{patient_profile}", patient.json(indent=2))
-        .replace("{criteria_json}", criteria_json)
+        .replace("{patient_profile}", patient.model_dump_json(indent=2))
+        .replace("{raw_criteria}", raw_criteria)
     )
 
     response = await client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
+        max_tokens=MATCH_MAX_TOKENS,
     )
 
     raw_json = response.choices[0].message.content.strip()
 
     try:
         data = _parse_llm_json(raw_json)
-    except (json.JSONDecodeError, ValueError) as e:
+    except (ValueError, TypeError) as e:
         logger.error(
             "Matching JSON parse error for %s: %s\nRaw: %s",
             trial.nct_id, e, raw_json,
@@ -146,33 +148,47 @@ async def match_patient_to_trial(
 async def _match_one(
     patient: PatientProfile,
     trial: TrialResult,
+    semaphore: asyncio.Semaphore,
 ) -> tuple[TrialResult, MatchOutput] | None:
-    """Parse criteria then match. Returns None on any error so bulk continues."""
-    try:
-        parsed = await parse_trial_criteria(trial.raw_criteria)
-        result = await match_patient_to_trial(patient, trial, parsed)
-        return (trial, result)
-    except Exception as e:
-        logger.warning("Skipping trial %s due to error: %s", trial.nct_id, e)
-        return None
+    """Match one trial. Returns None on any error so bulk continues."""
+    async with semaphore:
+        try:
+            result = await match_patient_to_trial(patient, trial)
+            return (trial, result)
+        except Exception as e:
+            logger.warning("Skipping trial %s due to error: %s", trial.nct_id, e)
+            return None
 
 
 async def bulk_match(
     patient: PatientProfile,
     trials: list[TrialResult],
-    top_n: int = 10,
-) -> list[tuple[TrialResult, MatchOutput]]:
+    top_n: int = 5,
+    cached_by_nct: dict[str, tuple[TrialResult, MatchOutput]] | None = None,
+) -> tuple[list[tuple[TrialResult, MatchOutput]], int]:
     """
-    Match patient against all trials concurrently.
-    Returns up to top_n results sorted by overall_score descending.
-    Failures are logged and skipped — never crash the pipeline.
+    Match patient against trials with bounded concurrency.
+    Returns (top_n results sorted by score, number of LLM calls made).
+    Skips trials present in cached_by_nct.
     """
-    tasks = [_match_one(patient, trial) for trial in trials]
-    raw_results = await asyncio.gather(*tasks)
+    cached_by_nct = cached_by_nct or {}
+    cached_hits = [
+        cached_by_nct[t.nct_id]
+        for t in trials
+        if t.nct_id in cached_by_nct
+    ]
+    to_score = [t for t in trials if t.nct_id not in cached_by_nct]
 
-    # Filter out None (failed) results
-    valid = [r for r in raw_results if r is not None]
+    llm_calls = 0
+    if to_score:
+        semaphore = asyncio.Semaphore(MATCH_CONCURRENCY)
+        tasks = [_match_one(patient, trial, semaphore) for trial in to_score]
+        raw_results = await asyncio.gather(*tasks)
+        llm_calls = len(to_score)
+        fresh = [r for r in raw_results if r is not None]
+    else:
+        fresh = []
 
-    # Sort by overall_score descending, return top N
+    valid = cached_hits + fresh
     valid.sort(key=lambda x: x[1].overall_score, reverse=True)
-    return valid[:top_n]
+    return valid[:top_n], llm_calls
