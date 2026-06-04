@@ -144,7 +144,8 @@ def get_cached_matches_for_patient(patient_id: str) -> dict[str, tuple[TrialResu
             supabase.table("match_results")
             .select(
                 "overall_score, status, summary, criteria_breakdown, "
-                "trials(nct_id, title, condition, raw_criteria)"
+                "trials(nct_id, title, condition, raw_criteria, "
+                "contact_name, contact_email, contact_phone)"
             )
             .eq("patient_id", patient_id)
             .execute()
@@ -165,6 +166,9 @@ def get_cached_matches_for_patient(patient_id: str) -> dict[str, tuple[TrialResu
             condition=trial_data.get("condition") or "",
             status="RECRUITING",
             raw_criteria=trial_data.get("raw_criteria") or "",
+            contact_name=trial_data.get("contact_name"),
+            contact_email=trial_data.get("contact_email"),
+            contact_phone=trial_data.get("contact_phone"),
         )
         cached[nct_id] = (trial, _match_output_from_row(row, trial))
     return cached
@@ -177,6 +181,9 @@ def upsert_trial(trial: TrialResult, parsed_criteria: dict | None = None) -> str
         "condition": trial.condition,
         "raw_criteria": trial.raw_criteria,
         "parsed_criteria": parsed_criteria or {},
+        "contact_name": trial.contact_name,
+        "contact_email": trial.contact_email,
+        "contact_phone": trial.contact_phone,
     }
     response = supabase.table("trials").upsert(payload, on_conflict="nct_id").execute()
     return response.data[0]["id"]

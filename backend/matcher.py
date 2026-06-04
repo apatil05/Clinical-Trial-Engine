@@ -196,17 +196,35 @@ def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int
     """
     score = 100
     for c in breakdown:
-        if c.verdict == "INELIGIBLE":
-            score -= 35 if c.type == "exclusion" else 20
-        elif c.verdict == "UNCERTAIN":
-            score -= 3 if c.type == "exclusion" else 8
+        # Normalize — LLM sometimes returns "uncertain" / "Uncertain" / etc.
+        # If we compare case-sensitively, the deduction silently skips and the
+        # score stays inflated while the frontend still shows UNCERTAIN badges.
+        verdict = (c.verdict or "").strip().upper()
+        ctype   = (c.type or "").strip().lower()
+
+        if verdict == "INELIGIBLE":
+            score -= 35 if ctype == "exclusion" else 20
+        elif verdict == "UNCERTAIN":
+            score -= 3 if ctype == "exclusion" else 8
         if c.contested:
             score -= 2
 
     score = max(0, min(100, score))
 
+    # Sanity-log when the verdict counts don't reconcile with the score —
+    # helps catch silently-malformed breakdowns coming back from old cache rows.
+    uncertain_count = sum(1 for c in breakdown if (c.verdict or "").strip().upper() == "UNCERTAIN")
+    if uncertain_count > 0 and score == 100:
+        logger.warning(
+            "Score=100 despite %d UNCERTAIN criteria — check verdict casing/types: %s",
+            uncertain_count,
+            [(c.verdict, c.type) for c in breakdown if (c.verdict or "").strip().upper() == "UNCERTAIN"],
+        )
+
     has_ineligible_exclusion = any(
-        c.verdict == "INELIGIBLE" and c.type == "exclusion" for c in breakdown
+        (c.verdict or "").strip().upper() == "INELIGIBLE"
+        and (c.type or "").strip().lower() == "exclusion"
+        for c in breakdown
     )
     if has_ineligible_exclusion or score < 40:
         status = "LIKELY_INELIGIBLE"
