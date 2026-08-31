@@ -104,6 +104,8 @@ def _extract_contact(study: dict) -> tuple[str | None, str | None, str | None]:
                 name = f"{name} ({affiliation})"
             return name, None, None
     except (KeyError, TypeError):
+        # a trial with no contacts module at all. not an error, plenty of
+        # studies list nobody, and the UI already handles all three being None.
         pass
     return None, None, None
 
