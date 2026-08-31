@@ -83,7 +83,7 @@ If you already have a `.env` with real keys in it, skip the `cp`. It overwrites.
 ## Tests
 
 ```bash
-# Backend — 35 tests, offline, no API key needed
+# Backend — 37 tests, offline, no API key needed
 cd backend
 source .venv/bin/activate
 pip install -r requirements-dev.txt
