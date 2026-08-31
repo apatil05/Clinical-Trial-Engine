@@ -38,13 +38,13 @@ MAX_CRITERIA_CHARS = int(os.getenv("MAX_CRITERIA_CHARS", "6000"))
 # 253B takes ~20s a call. Raise this and Nebius starts rate-limiting the model.
 MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "2"))
 
-# this has to be big. Nemotron Ultra opens every response with a <think> block
-# and reasons for 8-10k characters before it writes any JSON. At 2048 and at
-# 4096 it got cut off mid-thought, so the response contained no JSON at all and
-# the pass died on "Expecting value: line 1 column 1 (char 0)". Measured: 10 of
-# 14 calls failed that way at 4096, and not one response ever reached a closing
-# </think>. Lower this and trials silently fall back to a single pass.
-MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "16384"))
+# raising this does NOT fix the parse failures, despite looking like it should.
+# Nemotron Ultra opens with a <think> block and stops mid-thought at 8-10k
+# characters having emitted no JSON. Measured across two runs: at 4096 the
+# bodies came back 8089-9989 chars, at 16384 they came back 8191-9867. Same
+# distribution, so the cap was never what was cutting them off. The actual
+# lever is the system prompt. See AUDIT.md C2.
+MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "4096"))
 
 # retries per pass on transient failure (rate limits, timeouts).
 MATCH_RETRIES = int(os.getenv("MATCH_RETRIES", "3"))
