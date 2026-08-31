@@ -1,10 +1,14 @@
 """
-matcher.py — Per-criterion matching logic + bulk async orchestration.
+matcher.py — per-criterion matching + bulk async orchestration.
 
-match_patient_to_trial() runs one patient vs one trial.
-bulk_match() fans out across all trials concurrently via asyncio.gather().
-Temperature is always 0.1. Prompts return JSON only.
-UNCERTAIN is always preferred over INELIGIBLE when data is missing.
+match_patient_to_trial() runs one patient against one trial.
+bulk_match() fans that out across every trial via asyncio.gather().
+
+Two passes per trial: the same model at temperature 0.1 and 0.5. The score
+never comes from the model. compute_score_from_breakdown() is the only thing
+that sets it, on every path.
+
+UNCERTAIN beats INELIGIBLE whenever the notes simply don't say.
 """
 
 import os
@@ -25,24 +29,29 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Tunable for hackathon demos — higher concurrency uses more Nebius credits, finishes faster.
+# criteria longer than this get cut before they reach the prompt. some oncology
+# trials ship 20k characters of eligibility text, which eats the token budget
+# before the model has emitted any JSON.
 MAX_CRITERIA_CHARS = int(os.getenv("MAX_CRITERIA_CHARS", "6000"))
-# NOTE: each trial fires 2 LLM calls (dual-pass scoring), so effective concurrent
-# requests = MATCH_CONCURRENCY * 2. Nemotron 253B takes ~20s per call — keep this low
-# so we don't saturate Nebius's per-model capacity.
+
+# each trial fires 2 calls, so live requests = MATCH_CONCURRENCY * 2. Nemotron
+# 253B takes ~20s a call. Raise this and Nebius starts rate-limiting the model.
 MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "2"))
-DEFAULT_MAX_TRIALS = int(os.getenv("MAX_TRIALS", "8"))
-MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "2048"))
-# Retries per single-pass LLM call on transient failure (rate limits, timeouts).
+
+# this has to be big. Nemotron Ultra opens every response with a <think> block
+# and reasons for 8-10k characters before it writes any JSON. At 2048 and at
+# 4096 it got cut off mid-thought, so the response contained no JSON at all and
+# the pass died on "Expecting value: line 1 column 1 (char 0)". Measured: 10 of
+# 14 calls failed that way at 4096, and not one response ever reached a closing
+# </think>. Lower this and trials silently fall back to a single pass.
+MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "16384"))
+
+# retries per pass on transient failure (rate limits, timeouts).
 MATCH_RETRIES = int(os.getenv("MATCH_RETRIES", "3"))
-# Backoff (seconds) — rate limits need much longer waits than network blips.
+
+# seconds. rate limits need much longer waits than a network blip does.
 RATE_LIMIT_BACKOFF_BASE = 5.0
 TRANSIENT_BACKOFF_BASE = 0.6
-
-# Bump whenever scoring formula changes. If your demo shows stale scores, wipe match_results:
-#   DELETE FROM match_results;
-# v2: dual-pass + deterministic uncertainty penalty (-5 inc, -3 exc, -2 contested)
-SCORING_VERSION = 2
 
 client = AsyncOpenAI(
     api_key=os.environ["NEBIUS_API_KEY"],
@@ -118,11 +127,15 @@ async def _single_match_pass(
     patient: PatientProfile,
     trial: TrialResult,
     temperature: float,
+    call_counter: list[int] | None = None,
 ) -> MatchOutput:
     """
-    One LLM scoring pass at the given temperature, with retry on transient errors.
-    Rate limits and network blips drop trials silently otherwise — the retry loop
-    matters more here than in extraction because dual-pass doubles the call count.
+    One scoring pass at the given temperature, retried on transient errors.
+    Without the retry loop a rate limit drops the trial silently. That matters
+    more here than in extraction because two passes double the call count.
+
+    call_counter is a one-element list bumped on every request actually sent,
+    retries included, so /match can report a real number instead of a guess.
     """
     raw_criteria = (trial.raw_criteria or "").strip()
     if len(raw_criteria) > MAX_CRITERIA_CHARS:
@@ -137,14 +150,26 @@ async def _single_match_pass(
     last_error: Exception | None = None
     for attempt in range(MATCH_RETRIES + 1):
         try:
+            if call_counter is not None:
+                call_counter[0] += 1
             response = await client.chat.completions.create(
                 model=MODEL_MATCH,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
                 max_tokens=MATCH_MAX_TOKENS,
             )
-            raw_json = response.choices[0].message.content.strip()
-            data = _parse_llm_json(raw_json)
+            raw_json = (response.choices[0].message.content or "").strip()
+            try:
+                data = _parse_llm_json(raw_json)
+            except Exception:
+                # log what actually came back. "Expecting value: line 1 column 1"
+                # tells you nothing about whether the model returned prose, an
+                # empty string, or JSON that ran out of tokens mid-object.
+                logger.warning(
+                    "Unparseable response for %s (temp=%.1f, %d chars): %.400r",
+                    trial.nct_id, temperature, len(raw_json), raw_json,
+                )
+                raise
             breakdown = [CriterionVerdict(**v) for v in data.get("criteria_breakdown", [])]
             return MatchOutput(
                 overall_score=data["overall_score"],
@@ -161,8 +186,10 @@ async def _single_match_pass(
                 )
                 raise last_error
 
-            # Rate limits need much longer waits than network blips. Jitter prevents
-            # both passes from retrying at the exact same moment and re-hitting the limit.
+            # a rate limit needs a much longer wait than a network blip, so the
+            # two get different bases. the jitter matters because both passes
+            # fail together: without it they back off in lockstep and hit the
+            # limit again at exactly the same moment.
             err_text = str(e).lower()
             is_rate_limit = (
                 "rate" in err_text or "429" in err_text or "quota" in err_text
@@ -181,24 +208,39 @@ async def _single_match_pass(
 
 def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int, str]:
     """
-    Deterministic score formula — pure function of the criterion verdicts.
-    Called both when reconciling fresh LLM passes AND when loading cached results,
-    so the same penalty rules apply regardless of when the breakdown was generated.
-    No cache invalidation ever needed when the formula changes.
+    The score. Pure function of the verdicts, nothing else feeds it.
 
-    Per-criterion deltas (start at 100, all clamped to [0, 100]):
-      INELIGIBLE inclusion: -20  (patient fails a required criterion)
-      INELIGIBLE exclusion: -35  (patient triggers a disqualifying criterion)
-      UNCERTAIN  inclusion: -8   (can't confirm patient meets it)
-      UNCERTAIN  exclusion: -3   (can't confirm patient avoids it)
-      contested:            -2   (both LLM passes disagreed — extra doubt)
-      ELIGIBLE:              0   (no change — they met the criterion)
+    Every path runs through here: fresh passes, the single-pass fallback, and
+    cached rows on load. That is what lets the weights below change without a
+    cache wipe, because no stored score is ever trusted.
+
+    Start at 100, clamp to [0, 100]:
+
+      INELIGIBLE exclusion  -35   trigger an exclusion and the protocol is done
+                                  with you. nothing about the patient can be
+                                  adjusted to get back in.
+      INELIGIBLE inclusion  -20   a failed inclusion is often movable. a lab
+                                  value, a washout period, a med that can be
+                                  swapped. worth a coordinator's phone call, so
+                                  it should not sink the score as hard.
+      UNCERTAIN  inclusion   -8   we cannot show the patient qualifies. that is
+                                  real doubt about a requirement.
+      UNCERTAIN  exclusion   -3   notes are usually silent on an exclusion
+                                  because the patient does not have it. weak
+                                  evidence, so a light touch.
+      contested              -2   the two passes disagreed. extra doubt on top
+                                  of whatever verdict survived.
+      ELIGIBLE                0
+
+    UNCERTAIN costs points on purpose. Sparse notes must not score 100 against
+    a trial whose criteria were never evaluated.
     """
     score = 100
     for c in breakdown:
-        # Normalize — LLM sometimes returns "uncertain" / "Uncertain" / etc.
-        # If we compare case-sensitively, the deduction silently skips and the
-        # score stays inflated while the frontend still shows UNCERTAIN badges.
+        # normalize first. the model returns "uncertain" and "Uncertain" as
+        # happily as "UNCERTAIN". compare case-sensitively and the deduction
+        # skips without erroring, so the score reads 100 while the UI is still
+        # showing UNCERTAIN badges next to it.
         verdict = (c.verdict or "").strip().upper()
         ctype   = (c.type or "").strip().lower()
 
@@ -211,8 +253,8 @@ def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int
 
     score = max(0, min(100, score))
 
-    # Sanity-log when the verdict counts don't reconcile with the score —
-    # helps catch silently-malformed breakdowns coming back from old cache rows.
+    # a 100 alongside UNCERTAIN verdicts means the casing or type normalization
+    # above stopped matching. catches malformed breakdowns from old cache rows.
     uncertain_count = sum(1 for c in breakdown if (c.verdict or "").strip().upper() == "UNCERTAIN")
     if uncertain_count > 0 and score == 100:
         logger.warning(
@@ -238,8 +280,15 @@ def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int
 
 def _reconcile_passes(a: MatchOutput, b: MatchOutput) -> MatchOutput:
     """
-    Merge two scoring passes into one breakdown, then compute the score
-    deterministically. Disagreements collapse to UNCERTAIN + contested=True.
+    Merge both passes into one breakdown, then score it deterministically.
+    Where they disagree the criterion drops to UNCERTAIN + contested=True.
+
+    Known gap: the join is on criterion_id, and MATCHING_PROMPT never pins the
+    id scheme. Two passes have no reason to agree on ids, so in practice most
+    criteria fall through the `c_b is None` branch and keep pass A's verdict
+    with no contested flag. Symptom is a run with 0 contested across every
+    trial. Fixing it means joining on normalized criterion_text or pinning the
+    ids in the prompt. See AUDIT.md C1.
     """
     b_by_id = {c.criterion_id: c for c in b.criteria_breakdown}
 
@@ -268,18 +317,36 @@ def _reconcile_passes(a: MatchOutput, b: MatchOutput) -> MatchOutput:
     )
 
 
+def _score_single_pass(p: MatchOutput) -> MatchOutput:
+    """
+    One pass survived, the other raised. Re-score the survivor through the same
+    formula anyway.
+
+    Returning the pass as-is is what let the model's own arithmetic reach the
+    UI. NCT03980717 came back 45 where the penalty table gives 29, on roughly
+    one trial in four, and nothing in the response marked which ones.
+    """
+    score, status = compute_score_from_breakdown(p.criteria_breakdown)
+    return MatchOutput(
+        overall_score=score,
+        status=status,
+        summary=p.summary,
+        criteria_breakdown=p.criteria_breakdown,
+    )
+
+
 async def match_patient_to_trial(
     patient: PatientProfile,
     trial: TrialResult,
+    call_counter: list[int] | None = None,
 ) -> MatchOutput:
     """
-    Run two concurrent LLM scoring passes and reconcile disagreements.
-    Tolerates one-pass failure: if both passes fail the trial drops, but if only
-    one fails the surviving pass is returned as-is (just no contested-flagging).
+    Run both scoring passes concurrently and reconcile them.
+    One pass failing is survivable. Both failing drops the trial.
     """
     results = await asyncio.gather(
-        _single_match_pass(patient, trial, temperature=0.1),
-        _single_match_pass(patient, trial, temperature=0.5),
+        _single_match_pass(patient, trial, 0.1, call_counter),
+        _single_match_pass(patient, trial, 0.5, call_counter),
         return_exceptions=True,
     )
     pass_a, pass_b = results
@@ -290,12 +357,12 @@ async def match_patient_to_trial(
     if a_ok and b_ok:
         return _reconcile_passes(pass_a, pass_b)
     if a_ok:
-        logger.info("Trial %s: pass B failed, returning pass A only", trial.nct_id)
-        return pass_a
+        logger.info("Trial %s: pass B failed, scoring on pass A alone", trial.nct_id)
+        return _score_single_pass(pass_a)
     if b_ok:
-        logger.info("Trial %s: pass A failed, returning pass B only", trial.nct_id)
-        return pass_b
-    # Both failed — re-raise so _match_one logs and drops this trial
+        logger.info("Trial %s: pass A failed, scoring on pass B alone", trial.nct_id)
+        return _score_single_pass(pass_b)
+    # both failed. re-raise so _match_one logs it and drops the trial.
     raise pass_a if isinstance(pass_a, Exception) else pass_b
 
 
@@ -307,11 +374,12 @@ async def _match_one(
     patient: PatientProfile,
     trial: TrialResult,
     semaphore: asyncio.Semaphore,
+    call_counter: list[int] | None = None,
 ) -> tuple[TrialResult, MatchOutput] | None:
-    """Match one trial. Returns None on any error so bulk continues."""
+    """Match one trial. Returns None on any error so the rest of the batch survives."""
     async with semaphore:
         try:
-            result = await match_patient_to_trial(patient, trial)
+            result = await match_patient_to_trial(patient, trial, call_counter)
             return (trial, result)
         except Exception as e:
             logger.warning("Skipping trial %s due to error: %s", trial.nct_id, e)
@@ -325,9 +393,9 @@ async def bulk_match(
     cached_by_nct: dict[str, tuple[TrialResult, MatchOutput]] | None = None,
 ) -> tuple[list[tuple[TrialResult, MatchOutput]], int]:
     """
-    Match patient against trials with bounded concurrency.
-    Returns (top_n results sorted by score, number of LLM calls made).
-    Skips trials present in cached_by_nct.
+    Match the patient against every trial with bounded concurrency.
+    Returns (top_n results sorted by score, LLM calls actually made).
+    Trials already in cached_by_nct are not re-scored.
     """
     cached_by_nct = cached_by_nct or {}
     cached_hits = [
@@ -337,15 +405,18 @@ async def bulk_match(
     ]
     to_score = [t for t in trials if t.nct_id not in cached_by_nct]
 
-    llm_calls = 0
+    # counts requests sent, not trials scored. len(to_score) undercounts by at
+    # least half (two passes each) and ignores retries entirely, which is how a
+    # run reporting 3 calls actually spent 11.
+    call_counter = [0]
     if to_score:
         semaphore = asyncio.Semaphore(MATCH_CONCURRENCY)
-        tasks = [_match_one(patient, trial, semaphore) for trial in to_score]
+        tasks = [_match_one(patient, trial, semaphore, call_counter) for trial in to_score]
         raw_results = await asyncio.gather(*tasks)
-        llm_calls = len(to_score)
         fresh = [r for r in raw_results if r is not None]
     else:
         fresh = []
+    llm_calls = call_counter[0]
 
     valid = cached_hits + fresh
     valid.sort(key=lambda x: x[1].overall_score, reverse=True)

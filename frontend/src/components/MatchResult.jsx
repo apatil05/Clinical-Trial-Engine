@@ -1,3 +1,5 @@
+import { coveragePct, summaryText, LOW_COVERAGE_THRESHOLD } from '../results.js'
+
 const VERDICT_CONFIG = {
   ELIGIBLE:   { label: 'Eligible',   cls: 'badge-eligible',   icon: '✓' },
   INELIGIBLE: { label: 'Ineligible', cls: 'badge-ineligible', icon: '✗' },
@@ -10,6 +12,8 @@ const STATUS_CONFIG = {
   LIKELY_INELIGIBLE: { label: 'Unlikely Match', color: 'var(--ineligible)', bg: 'var(--ineligible-bg)', border: 'var(--ineligible-border)' },
 }
 
+// criterion_id is whatever the model emitted and it repeats often enough to
+// collide, so pair it with the row index for the React key.
 function CriterionRow({ criterion }) {
   const cfg = VERDICT_CONFIG[criterion.verdict] || VERDICT_CONFIG.UNCERTAIN
   return (
@@ -43,6 +47,24 @@ function CriterionRow({ criterion }) {
   )
 }
 
+// trial titles carry & and # often enough that this matters. unencoded, the
+// browser reads them as the next query param or as a fragment and the body
+// arrives truncated at that character.
+function mailtoHref(result) {
+  const subject = `Interest in ${result.nct_id}`
+  const body = [
+    'Hello,',
+    '',
+    `I am interested in learning more about the study "${result.trial_title}" (${result.nct_id}).`,
+    '',
+    'Please let me know how I can get involved.',
+    '',
+    'Thank you.',
+  ].join('\n')
+  const params = new URLSearchParams({ subject, body })
+  return `mailto:${encodeURIComponent(result.contact_email)}?${params}`
+}
+
 export default function MatchResult({ result, onBack }) {
   if (!result) return null
 
@@ -54,9 +76,7 @@ export default function MatchResult({ result, onBack }) {
   const ineligibleCount = breakdown.filter(c => c.verdict === 'INELIGIBLE').length
   const uncertainCount  = breakdown.filter(c => c.verdict === 'UNCERTAIN').length
   const contestedCount  = breakdown.filter(c => c.contested).length
-  const coveragePct     = breakdown.length > 0
-    ? Math.round(((breakdown.length - uncertainCount) / breakdown.length) * 100)
-    : null
+  const coverage        = coveragePct(breakdown)
   const score = result.overall_score
   const scoreColor = score >= 75 ? 'var(--eligible)' : score >= 50 ? 'var(--uncertain)' : 'var(--ineligible)'
 
@@ -105,7 +125,7 @@ export default function MatchResult({ result, onBack }) {
               {result.trial_title}
             </h1>
             <p style={{ fontSize: 14, color: 'var(--text-mid)', lineHeight: 1.7 }}>
-              {result.summary}
+              {summaryText(result)}
             </p>
           </div>
         </div>
@@ -117,7 +137,7 @@ export default function MatchResult({ result, onBack }) {
             { label: 'NOT_MET',   value: ineligibleCount,          color: 'var(--ineligible)' },
             { label: 'UNCERTAIN', value: uncertainCount,           color: 'var(--uncertain)' },
             { label: 'CONTESTED', value: contestedCount,           color: 'var(--uncertain)' },
-            { label: 'DATA_COV',  value: `${coveragePct ?? '?'}%`, color: coveragePct >= 70 ? 'var(--eligible)' : coveragePct >= 40 ? 'var(--uncertain)' : 'var(--ineligible)' },
+            { label: 'DATA_COV',  value: `${coverage ?? '?'}%`, color: coverage >= 70 ? 'var(--eligible)' : coverage >= 40 ? 'var(--uncertain)' : 'var(--ineligible)' },
             { label: 'TOTAL',     value: breakdown.length,         color: 'var(--text-mid)' },
           ].map((s, i) => (
             <div key={s.label} style={{ paddingRight: 28, marginRight: 28, borderRight: i < 5 ? '1px solid var(--border)' : 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -129,7 +149,7 @@ export default function MatchResult({ result, onBack }) {
       </div>
 
       {/* Low-coverage warning */}
-      {coveragePct !== null && coveragePct < 60 && (
+      {coverage !== null && coverage < LOW_COVERAGE_THRESHOLD && (
         <div style={{
           marginBottom: 16,
           padding: '12px 16px',
@@ -140,7 +160,7 @@ export default function MatchResult({ result, onBack }) {
           <span style={{ color: 'var(--uncertain)', fontSize: 14, flexShrink: 0 }}>⚠</span>
           <div>
             <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--uncertain)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>
-              LOW DATA COVERAGE — {coveragePct}% OF CRITERIA EVALUABLE
+              LOW DATA COVERAGE — {coverage}% OF CRITERIA EVALUABLE
             </p>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
               Many criteria could not be evaluated because your notes lack the required data points.
@@ -193,7 +213,7 @@ export default function MatchResult({ result, onBack }) {
                       INCLUSION_CRITERIA — must be met
                     </td>
                   </tr>
-                  {inclusionCriteria.map(c => <CriterionRow key={c.criterion_id} criterion={c} />)}
+                  {inclusionCriteria.map((c, i) => <CriterionRow key={`inc-${i}-${c.criterion_id}`} criterion={c} />)}
                 </>
               )}
               {exclusionCriteria.length > 0 && (
@@ -208,7 +228,7 @@ export default function MatchResult({ result, onBack }) {
                       EXCLUSION_CRITERIA — must not be triggered
                     </td>
                   </tr>
-                  {exclusionCriteria.map(c => <CriterionRow key={c.criterion_id} criterion={c} />)}
+                  {exclusionCriteria.map((c, i) => <CriterionRow key={`exc-${i}-${c.criterion_id}`} criterion={c} />)}
                 </>
               )}
             </tbody>
@@ -286,7 +306,7 @@ export default function MatchResult({ result, onBack }) {
             </a>
             {result.contact_email && (
               <a
-                href={`mailto:${result.contact_email}?subject=Interest in ${result.nct_id}&body=Hello,%0A%0AI am interested in learning more about the study "${result.trial_title}" (${result.nct_id}).%0A%0APlease let me know how I can get involved.%0A%0AThank you.`}
+                href={mailtoHref(result)}
                 className="btn-secondary"
                 style={{ padding: '10px 20px', fontSize: 11, textDecoration: 'none', display: 'inline-block', textAlign: 'center' }}
               >

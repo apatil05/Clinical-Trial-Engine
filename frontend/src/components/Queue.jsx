@@ -1,3 +1,5 @@
+import { coveragePct, summaryText } from '../results.js'
+
 const STATUS_CONFIG = {
   LIKELY_ELIGIBLE:   { label: 'Strong Match',   cls: 'badge-eligible',   char: '●' },
   UNCERTAIN:         { label: 'Possible Match', cls: 'badge-uncertain',  char: '◐' },
@@ -16,12 +18,6 @@ function ScoreBar({ score }) {
       </span>
     </div>
   )
-}
-
-function coveragePct(breakdown) {
-  if (!breakdown || breakdown.length === 0) return null
-  const evaluable = breakdown.filter(c => c.verdict !== 'UNCERTAIN').length
-  return Math.round((evaluable / breakdown.length) * 100)
 }
 
 function ResultRow({ result, rank, onClick }) {
@@ -79,7 +75,7 @@ function ResultRow({ result, rank, onClick }) {
             display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
             flex: 1,
           }}>
-            {result.summary}
+            {summaryText(result)}
           </p>
           {coverage !== null && (
             <span style={{

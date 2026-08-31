@@ -1,7 +1,9 @@
 -- Clinical Trial Eligibility Engine — Supabase schema
--- Run once in Supabase Dashboard → SQL Editor → Run
+-- Run in Supabase Dashboard → SQL Editor → Run, then run migration_add_cache.sql.
 --
--- Safe to re-run: drops demo tables and recreates them (tables are empty in dev).
+-- This DROPS all three tables before recreating them. Re-running it deletes
+-- every patient, trial and match result you have. That is fine on a dev
+-- project with synthetic data and it is not fine anywhere else.
 
 -- ---------------------------------------------------------------------------
 -- Tables
@@ -26,6 +28,12 @@ create table public.trials (
   condition           text,
   raw_criteria        text,
   parsed_criteria     jsonb not null default '{}'::jsonb,
+  -- pulled from the CTGov central contact. upsert_trial() writes all three on
+  -- every write and get_cached_matches_for_patient() selects them back, so
+  -- leaving them out makes /match fail against a fresh database.
+  contact_name        text,
+  contact_email       text,
+  contact_phone       text,
   created_at          timestamptz not null default now()
 );
 
@@ -46,9 +54,18 @@ create index match_results_score_idx on public.match_results (overall_score desc
 create index trials_nct_id_idx on public.trials (nct_id);
 
 -- ---------------------------------------------------------------------------
--- Row Level Security (anon key from frontend/backend .env)
--- Hackathon-friendly: allow read/write on demo tables.
--- Tighten these policies before any real PHI deployment.
+-- Row Level Security
+--
+-- READ THIS BEFORE DEPLOYING ANYTHING.
+--
+-- RLS is enabled below, and then every policy grants anon full read and write
+-- on every table. Enabled RLS with an open policy is not protection. Anyone
+-- holding the anon key can read and write every row, and patients.raw_text
+-- holds the complete note somebody pasted in.
+--
+-- This is deliberate for a local demo where all the data is synthetic. It is
+-- not a configuration to point at real patient data. Narrow these policies and
+-- move the backend to a service-role key before this goes anywhere near PHI.
 -- ---------------------------------------------------------------------------
 
 alter table public.patients enable row level security;

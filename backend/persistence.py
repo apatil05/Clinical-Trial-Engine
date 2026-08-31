@@ -14,11 +14,12 @@ from models import CriterionVerdict, MatchOutput, MatchResultRow, PatientProfile
 logger = logging.getLogger(__name__)
 
 
-class DatabaseNotReadyError(RuntimeError):
-    """Raised when required tables/columns/policies are missing."""
-
-
 def patient_content_hash(raw_text: str) -> str:
+    """
+    Identity for a patient note. Whitespace and case are normalized first, so
+    the same note repasted with different line wrapping is the same patient
+    and does not create a second row with a second set of match results.
+    """
     normalized = " ".join(raw_text.split()).strip().lower()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -55,6 +56,9 @@ def find_or_create_patient(raw_text: str, profile: PatientProfile) -> tuple[str,
     Same notes → same content_hash → reuse patient row (no duplicate patients).
     """
     content_hash = patient_content_hash(raw_text)
+    # same notes give the same hash, so the patient row is reused rather than
+    # duplicated. that reuse is what makes get_cached_matches_for_patient()
+    # find anything on a second run.
     try:
         existing = (
             supabase.table("patients")
@@ -80,7 +84,9 @@ def find_or_create_patient(raw_text: str, profile: PatientProfile) -> tuple[str,
         return created.data[0]["id"], True
     except Exception as e:
         if "content_hash" in str(e):
-            # Older schema without content_hash — fall back to always inserting.
+            # schema predates migration_add_cache.sql. insert without the hash
+            # so the run still completes, but every run makes a new patient and
+            # nothing will ever cache. run the migration.
             created = (
                 supabase.table("patients")
                 .insert(
@@ -117,10 +123,13 @@ def get_cached_parsed_criteria(nct_id: str) -> dict | None:
 
 def _match_output_from_row(row: dict, trial: TrialResult) -> MatchOutput:
     """
-    Re-score cached rows using the current deterministic formula. The breakdown
-    is the source of truth; the stored score is ignored. This way, old cached
-    rows from before the penalty existed automatically display the corrected
-    score on next load — no cache wipe needed when the formula changes.
+    Rebuild a cached row's score instead of reading it back.
+
+    The stored overall_score is deliberately ignored. The breakdown is the only
+    thing kept, and compute_score_from_breakdown() re-derives the number from
+    it on every load. Change a penalty weight and rows written months ago show
+    the new score the next time they are opened. Nothing to invalidate, no
+    DELETE FROM match_results before a demo.
     """
     from matcher import compute_score_from_breakdown  # local import to avoid cycle
 
@@ -136,8 +145,9 @@ def _match_output_from_row(row: dict, trial: TrialResult) -> MatchOutput:
 
 def get_cached_matches_for_patient(patient_id: str) -> dict[str, tuple[TrialResult, MatchOutput]]:
     """
-    Load prior AI match results for this patient keyed by nct_id.
-    Powers instant re-runs for the same synthetic patient in demos.
+    Prior match results for this patient, keyed by nct_id.
+    A re-run on the same notes skips straight to these instead of paying for
+    the same Nebius calls twice.
     """
     try:
         response = (
@@ -175,6 +185,7 @@ def get_cached_matches_for_patient(patient_id: str) -> dict[str, tuple[TrialResu
 
 
 def upsert_trial(trial: TrialResult, parsed_criteria: dict | None = None) -> str:
+    """Write the trial, keyed on nct_id. Needs the contact_* columns from schema.sql."""
     payload = {
         "nct_id": trial.nct_id,
         "title": trial.title,
@@ -209,7 +220,10 @@ def upsert_match_result(
             .execute()
         )
     except Exception:
-        # Fallback if unique index not applied yet.
+        # upsert needs the (patient_id, trial_id) unique index from
+        # migration_add_cache.sql. without it the on_conflict target does not
+        # exist and Postgres rejects the statement, so fall back to a plain
+        # insert. duplicate rows are the cost of not running the migration.
         response = supabase.table("match_results").insert(payload).execute()
     return response.data[0]["id"]
 
@@ -245,45 +259,8 @@ def persist_match_results(
     return rows
 
 
-def load_result_rows_for_patient(
-    patient_id: str,
-    top_results: list[tuple[TrialResult, MatchOutput]],
-) -> list[MatchResultRow]:
-    """Load persisted row ids for top results (used when everything came from cache)."""
-    rows: list[MatchResultRow] = []
-    for trial, match_output in top_results:
-        try:
-            response = (
-                supabase.table("match_results")
-                .select("id, trial_id, trials!inner(nct_id)")
-                .eq("patient_id", patient_id)
-                .eq("trials.nct_id", trial.nct_id)
-                .limit(1)
-                .execute()
-            )
-            if response.data:
-                row = response.data[0]
-                rows.append(
-                    MatchResultRow(
-                        id=row["id"],
-                        patient_id=patient_id,
-                        trial_id=row["trial_id"],
-                        nct_id=trial.nct_id,
-                        trial_title=trial.title,
-                        overall_score=match_output.overall_score,
-                        status=match_output.status,
-                        summary=match_output.summary,
-                        criteria_breakdown=match_output.criteria_breakdown,
-                    )
-                )
-                continue
-        except Exception as e:
-            logger.debug("Could not load row for %s: %s", trial.nct_id, e)
-        rows.extend(persist_match_results(patient_id, [(trial, match_output)]))
-    return rows
-
-
 def list_queue(limit: int = 50) -> list[dict]:
+    """Every match result in the table, all patients, ranked by score. See /queue."""
     response = (
         supabase.table("match_results")
         .select("*, trials(nct_id, title, condition)")

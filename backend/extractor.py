@@ -1,17 +1,19 @@
 """
 extractor.py — LLM extraction logic.
 
-Two functions:
-  1. extract_patient_profile(raw_text) → PatientProfile
-  2. parse_trial_criteria(raw_criteria_text) → ParsedCriteria
+  extract_patient_profile(raw_text)      → PatientProfile
+  parse_trial_criteria(raw_criteria)     → ParsedCriteria
+  generate_sample_patient()              → str
 
-Both call the Nebius-hosted Llama 3.1 70B model.
-Temperature is always 0.1. All prompts return JSON only.
+The first two run on Llama 3.3 70B at temperature 0.1 and return JSON only.
+generate_sample_patient() runs hot (0.9) because it is writing prose, not
+extracting facts, and identical sample patients every time are useless.
 """
 
 import os
 import re
 import json
+import random
 import logging
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -23,16 +25,30 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_llm_json(raw: str) -> dict:
-    """Extract and parse JSON from an LLM response that may include markdown fences or prose."""
+    """
+    Pull JSON out of a response that was asked for JSON only and may still
+    arrive wrapped in markdown fences or padded with prose.
+    """
     text = raw.strip()
-    # Strip ```json ... ``` or ``` ... ``` fences
+
+    # drop the reasoning block first. Nemotron Ultra answers with
+    # <think>...</think> ahead of the JSON, and that block quotes the schema
+    # back at itself, braces and all. Leave it in and the brace fallback below
+    # grabs its first { and parses the model's scratch work as the answer.
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.I).strip()
+    # an unclosed <think> means it was cut off before writing anything useful
+    if re.match(r'<think>', text, flags=re.I):
+        raise ValueError("response is an unterminated <think> block, no JSON emitted")
+
+    # strip ```json ... ``` or ``` ... ``` fences
     fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
     if fence_match:
         text = fence_match.group(1).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Last resort: find the first {...} block in the response
+        # last resort. grab the outermost {...} and hope the prose was around
+        # it rather than inside it.
         brace_match = re.search(r'\{[\s\S]*\}', text)
         if brace_match:
             return json.loads(brace_match.group(0))
@@ -164,8 +180,6 @@ async def parse_trial_criteria(raw_criteria: str) -> ParsedCriteria:
 # Synthetic patient generation
 # ---------------------------------------------------------------------------
 
-import random
-
 SAMPLE_CONDITIONS = [
     "Fabry disease", "Pompe disease", "Niemann-Pick disease type C",
     "amyotrophic lateral sclerosis", "multiple sclerosis (relapsing-remitting)",
@@ -210,7 +224,10 @@ Return ONLY the patient health summary text. No preamble, no explanation."""
 
 
 async def generate_sample_patient() -> str:
-    """Generate a synthetic patient health summary for a random condition."""
+    """
+    Fabricate a patient note for a random rare condition.
+    Every note this produces is invented. Nothing here is a real record.
+    """
     condition = random.choice(SAMPLE_CONDITIONS)
     prompt = SAMPLE_GENERATION_PROMPT.replace("{condition}", condition)
 

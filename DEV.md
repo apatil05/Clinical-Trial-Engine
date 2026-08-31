@@ -68,7 +68,15 @@ cd frontend
 npm install
 ```
 
-> `.env` is already filled in with real keys. Do **not** run `cp .env.example .env`.
+```bash
+# Env — only needed once
+cp .env.example .env
+```
+
+Fill in `NEBIUS_API_KEY`, `SUPABASE_URL` and `SUPABASE_KEY` before starting the backend.
+It reads them at import, so a missing key is a `KeyError` on startup, not a failure later.
+
+If you already have a `.env` with real keys in it, skip the `cp`. It overwrites.
 
 ---
 

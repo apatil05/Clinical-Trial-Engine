@@ -1,6 +1,6 @@
 """
-models.py — Pydantic schemas for all inputs and outputs.
-Every LLM response is validated through these before touching Supabase.
+models.py — Pydantic schemas for every input and output.
+Nothing from an LLM reaches Supabase without being validated through here.
 """
 
 from pydantic import BaseModel, Field
@@ -56,10 +56,15 @@ class CriterionVerdict(BaseModel):
     type: str = Field(description="inclusion | exclusion")
     verdict: str = Field(description="ELIGIBLE | INELIGIBLE | UNCERTAIN")
     reason: str
-    contested: bool = Field(default=False, description="True when the two scoring passes disagreed on this criterion")
+    contested: bool = Field(
+        default=False,
+        description="True when the two scoring passes disagreed on this criterion",
+    )
 
 
 class MatchOutput(BaseModel):
+    # overall_score arrives from the LLM here, but nothing downstream keeps it.
+    # compute_score_from_breakdown() overwrites it on every path.
     overall_score: int = Field(ge=0, le=100)
     status: str = Field(description="LIKELY_ELIGIBLE | LIKELY_INELIGIBLE | UNCERTAIN")
     summary: str
@@ -70,12 +75,22 @@ class MatchOutput(BaseModel):
 # API request / response shapes
 # ---------------------------------------------------------------------------
 
+# a patient note is a page or two. anything past this is somebody feeding the
+# endpoint a book, and every character of it gets billed as prompt tokens on an
+# endpoint with no auth in front of it.
+MAX_PATIENT_TEXT_CHARS = 20_000
+
+
 class ExtractRequest(BaseModel):
-    patient_text: str
+    patient_text: str = Field(min_length=1, max_length=MAX_PATIENT_TEXT_CHARS)
 
 
 class MatchRequest(BaseModel):
-    patient_text: str = Field(description="Raw patient health notes")
+    patient_text: str = Field(
+        min_length=1,
+        max_length=MAX_PATIENT_TEXT_CHARS,
+        description="Raw patient health notes",
+    )
     confirmed_condition: Optional[str] = Field(
         default=None,
         description="Patient-confirmed condition after extraction step"
@@ -125,5 +140,6 @@ class BulkMatchResponse(BaseModel):
     persisted_to_db: bool = True
     db_message: Optional[str] = None
     cache_hits: int = 0
+    # requests actually sent to Nebius, retries included. not a trial count.
     llm_calls: int = 0
     patient_reused: bool = False

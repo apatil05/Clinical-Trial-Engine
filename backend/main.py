@@ -2,13 +2,19 @@
 main.py — FastAPI application entry point.
 
 Routes:
-  POST /match          — full pipeline: extract → fetch trials → bulk match → save → return top 10
-  GET  /trials/search  — direct ClinicalTrials.gov search
-  GET  /queue          — all match_results ranked by score
-  GET  /queue/{id}     — single match result with full breakdown
-  GET  /health         — API + Supabase readiness
+  POST /extract          — patient notes to a structured profile, no matching
+  POST /match            — full pipeline: extract, fetch trials, score, save, return top 10
+  POST /generate-sample  — synthetic patient note for a random condition
+  GET  /trials/search    — direct ClinicalTrials.gov search
+  GET  /queue            — all match_results ranked by score
+  GET  /queue/{id}       — single match result with full breakdown
+  GET  /health           — API + Supabase readiness
 
-CORS is always enabled — the React dev server runs on a different port.
+CORS is on because the React dev server runs on a different port.
+
+No auth, no rate limiting. /extract, /match and /generate-sample all spend
+Nebius credits on unauthenticated input. Run this locally. See the known
+limitations section of the README before putting it on a public address.
 """
 
 import asyncio
@@ -46,10 +52,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Clinical Trial Eligibility Engine", version="1.0.0")
 
+# wildcard origin for local dev. allow_credentials is deliberately off:
+# browsers reject "*" together with credentials, so leaving it True only
+# signalled an intent the app does not have. Narrow allow_origins to your
+# real frontend origin before deploying this anywhere.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,8 +92,9 @@ def _in_memory_rows(
 
 async def _enrich_trial_criteria_cache(trials: list[TrialResult]) -> None:
     """
-    Background job: parse eligibility criteria with AI and cache in Supabase.
-    Runs after /match responds so the demo stays fast while the DB fills with AI artifacts.
+    Parse eligibility criteria and cache them in Supabase.
+    Fired after /match has already responded, so the parse cost never lands on
+    the request the user is waiting for.
     """
     sem = asyncio.Semaphore(4)
 
@@ -197,7 +208,8 @@ async def match(req: MatchRequest):
         else:
             result_rows = _in_memory_rows(patient_id, top_results)
 
-        # Cache parsed criteria in background for trials we actually scored with AI.
+        # only enrich what we actually scored. cached trials already have their
+        # parsed criteria in the trials table.
         trials_to_enrich = [t for t in trials if t.nct_id not in cached_by_nct]
         if trials_to_enrich:
             asyncio.create_task(_enrich_trial_criteria_cache(trials_to_enrich))
@@ -214,6 +226,11 @@ async def match(req: MatchRequest):
             patient_reused=patient_reused,
         )
 
+    except HTTPException:
+        # the 400 and 404 above are raised inside this try. HTTPException
+        # subclasses Exception, so without this the clean message written for
+        # the user came back as "Matching failed: {'error': ...}" with a 500.
+        raise
     except Exception as e:
         logger.error("Error in /match: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -243,7 +260,13 @@ async def trials_search(condition: str, max_results: int = 20):
 
 @app.get("/queue")
 async def get_queue():
-    """Return all match results from Supabase ranked by overall_score descending."""
+    """
+    Every match result in the database, ranked by score.
+
+    No auth and no patient filter, so this hands one caller every patient's
+    results. Nothing in the UI calls it. It stays for local inspection until
+    accounts land. Do not expose this route publicly.
+    """
     try:
         results = list_queue()
         return {"count": len(results), "results": results}
@@ -269,6 +292,7 @@ async def get_queue_item(result_id: str):
             raise HTTPException(status_code=404, detail={"error": "Result not found."})
         return response.data
     except HTTPException:
+        # same reason as /match. without this the 404 becomes a 500.
         raise
     except Exception as e:
         logger.error("Error in /queue/%s: %s", result_id, e)

@@ -72,7 +72,7 @@ Trials are ranked by eligibility score. Each result shows the overall score, dat
 ## Key Features
 
 - **Dual-agent architecture** — two independent models score each trial in parallel; disagreements are flagged, not hidden
-- **Deterministic scoring** — score is a pure function of the verdict breakdown; cached results from any point in time always reflect the current formula
+- **Deterministic scoring** — the score is a pure function of the verdict breakdown on every path, including when one of the two passes fails. Cached results are re-scored from their breakdown on load, so changing a penalty weight updates old rows without a cache wipe
 - **Data coverage indicator** — shows what percentage of trial criteria could be evaluated from the patient's notes, with a warning when coverage is below 60%
 - **Contested criteria flags** — criteria where the two agents disagreed are visually marked in the breakdown
 - **Condition keyword filtering** — post-filters ClinicalTrials.gov's fuzzy search results to prevent off-topic trials from appearing (e.g. GBA1-Parkinson's trials leaking into Gaucher disease searches)
@@ -113,11 +113,12 @@ Trials are ranked by eligibility score. Each result shows the overall score, dat
 │   ├── src/
 │   │   ├── App.jsx                          # State machine, routing, confirm step
 │   │   ├── api.js                           # All fetch calls to FastAPI
+│   │   ├── results.js                       # Shared result helpers: coverage, summary
 │   │   └── components/
 │   │       ├── PatientInput.jsx             # Notes input, syntax highlighting overlay
 │   │       ├── ScreeningLoader.jsx          # Animated terminal during screening
 │   │       ├── Queue.jsx                    # Ranked results table with data coverage
-│   │       └── MatchResult.jsx             # Full criterion breakdown, contact card
+│   │       └── MatchResult.jsx              # Full criterion breakdown, contact card
 │   ├── index.html                           # CSS design system (custom properties)
 │   └── vite.config.js
 │
@@ -126,7 +127,9 @@ Trials are ranked by eligibility score. Each result shows the overall score, dat
 │   └── migration_add_cache.sql             # Cache column migration
 │
 ├── .env.example
+├── AUDIT.md                                 # Pre-release audit: findings, fixes, what is still open
 ├── DEV.md                                   # Start/stop/restart commands
+├── docs/COMMENT_STYLE.md                    # How comments in this repo are written
 └── README.md
 ```
 
@@ -163,14 +166,18 @@ NEBIUS_MODEL_EXTRACT=meta-llama/Llama-3.3-70B-Instruct
 NEBIUS_MODEL_PARSE=meta-llama/Llama-3.3-70B-Instruct
 NEBIUS_MODEL_MATCH=nvidia/Llama-3_1-Nemotron-Ultra-253B-v1
 
-MAX_TRIALS=8
 MATCH_CONCURRENCY=2
 MAX_CRITERIA_CHARS=6000
-MATCH_MAX_TOKENS=2048
+MATCH_MAX_TOKENS=16384
+MATCH_RETRIES=3
 
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-supabase-anon-key
+
+VITE_API_URL=http://localhost:8000
 ```
+
+`.env.example` is the authoritative list and every variable in it is read by something.
 
 ### 3. Apply the database schema
 
@@ -238,6 +245,22 @@ Surface trial sites within a patient-defined travel radius, matched against site
 
 **Gap Analysis**
 For trials just outside a patient's eligibility, show exactly what would need to change: *"Your platelet count is 98,000 /μL. This trial requires ≥100,000. Worth confirming with a repeat CBC at screening."*
+
+---
+
+## Known Limitations
+
+Read this before running the engine against anything that is not synthetic data.
+
+**No auth, no rate limiting.** `/extract`, `/match` and `/generate-sample` all accept free text and spend Nebius credits, with no authentication in front of them. `patient_text` is capped at 20,000 characters and `max_trials` at 30, but there is no per-caller limit of any kind. Run this locally. Deployed as-is on a public address it is a metered endpoint a stranger can drain.
+
+**The Supabase policies are wide open.** `supabase/schema.sql` enables RLS on all three tables and then grants `anon` full read and write on every one of them, `patients.raw_text` included. Enabled RLS with an open policy is not protection — anyone holding the anon key can read every note in the database. This is deliberate for a local synthetic-data demo and is not a configuration for real patient data.
+
+**`GET /queue` returns every patient's results.** No auth, no filter. Nothing in the UI calls it; it exists for local inspection. Accounts are on the roadmap and that is when it gets scoped.
+
+**Dual-agent reconciliation is weaker than it looks.** The two passes are joined on `criterion_id`, and the matching prompt never pins the id scheme, so the two passes have no reason to agree on ids. In practice most criteria fall through and keep the first pass's verdict without a contested flag. A run producing zero contested criteria across every trial is this, not agreement. Tracked in [AUDIT.md](AUDIT.md) as C1.
+
+**The cache path is verified by reading, not by running.** `get_cached_matches_for_patient` and the recompute-on-load behavior have not been executed end to end against a live database. See [AUDIT.md](AUDIT.md) C6.
 
 ---
 

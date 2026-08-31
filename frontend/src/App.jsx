@@ -7,6 +7,11 @@ import { extractProfile, runBulkMatch } from './api.js'
 
 const STEPS = ['input', 'confirm', 'screening', 'results', 'detail']
 
+// how many trials one screening run pulls and scores. two Nebius calls per
+// trial, ~20s each, so this is the number that decides both how long the run
+// takes and what it costs. drop it to 3 when testing.
+const MAX_TRIALS = 8
+
 const CONFIDENCE_CONFIG = {
   high:      { label: 'High confidence', icon: '✓' },
   low:       { label: 'Low confidence — verify', icon: '?' },
@@ -52,7 +57,7 @@ export default function App() {
     setScreeningDone(false)
     setStep('screening')
     try {
-      const data = await runBulkMatch(patientText, confirmedCondition.trim(), extractedProfile, 8)
+      const data = await runBulkMatch(patientText, confirmedCondition.trim(), extractedProfile, MAX_TRIALS)
       if (data.persisted_to_db === false && data.db_message) {
         setError(`Saved in-memory only: ${data.db_message}`)
       } else if (data.cache_hits > 0) {
@@ -265,7 +270,7 @@ export default function App() {
 
         {step === 'screening' && (
           <div style={{ maxWidth: 720, margin: '64px auto 0', padding: '0 40px' }}>
-            <ScreeningLoader condition={confirmedCondition} maxTrials={8} totalScreened={screeningDone ? totalScreened : null} isDone={screeningDone} />
+            <ScreeningLoader condition={confirmedCondition} maxTrials={MAX_TRIALS} totalScreened={screeningDone ? totalScreened : null} isDone={screeningDone} />
           </div>
         )}
 
@@ -285,7 +290,7 @@ export default function App() {
             AIxBio_HACKATHON · BAYER_CO.LAB · BOSTON_TECH_WEEK_2026 · ALL_DEMO_DATA_IS_SYNTHETIC
           </p>
           <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.06em' }}>
-            LLAMA_3.1_70B_VIA_NEBIUS · CLINICALTRIALS.GOV
+            LLAMA_3.3_70B + NEMOTRON_253B VIA NEBIUS · CLINICALTRIALS.GOV
           </p>
         </div>
       </footer>

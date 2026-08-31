@@ -1,6 +1,8 @@
 import { useState, useRef } from 'react'
 import { generateSamplePatient } from '../api.js'
 
+// both notes below are invented. no real patient record is used anywhere in
+// this repo, and neither person exists.
 const SYNTHETIC_NOTE_2 = `PATIENT HEALTH SUMMARY
 
 Patient: James R.  |  Date of Birth: August 3, 1958  |  Male  |  Cambridge, MA
@@ -87,6 +89,9 @@ No current or planned pregnancy. No known drug allergies.
 BMI: 22.4 kg/m². Blood type: O positive.
 Patient willing to travel up to 200 miles for study.`
 
+// the highlight layer is injected with dangerouslySetInnerHTML, so anything
+// the user pasted has to be escaped before the term matching adds its own
+// spans. escape first, match second, never the other way round.
 function escapeHtml(text) {
   return text
     .replace(/&/g, '&amp;')
@@ -123,6 +128,7 @@ export default function PatientInput({ onAnalyze, isLoading }) {
   const [notesText, setNotesText] = useState(SYNTHETIC_NOTE)
   const [activePatient, setActivePatient] = useState('gaucher')
   const [isGenerating, setIsGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState(null)
 
   function selectPatient(id) {
     setActivePatient(id)
@@ -132,12 +138,16 @@ export default function PatientInput({ onAnalyze, isLoading }) {
 
   async function handleGenerateSample() {
     setIsGenerating(true)
+    setGenerateError(null)
     setActivePatient(null)
     try {
       const data = await generateSamplePatient()
       setNotesText(data.patient_text)
-    } catch {
-      // silently leave existing text on failure
+    } catch (err) {
+      // this used to swallow the error and keep the old text. Nebius being
+      // down looked exactly like the button doing nothing at all.
+      setGenerateError(err.message || 'Could not generate a sample.')
+      setActivePatient('gaucher')
     } finally {
       setIsGenerating(false)
     }
@@ -388,10 +398,11 @@ export default function PatientInput({ onAnalyze, isLoading }) {
             </div>
           </div>
 
-          <p style={{ marginTop: 11, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-hint)', letterSpacing: '0.05em', textAlign: 'right' }}>
-            {activePatient === 'gaucher' && '// example loaded — gaucher disease patient, synthetic data'}
-            {activePatient === 'parkinson' && '// example loaded — parkinson disease patient, synthetic data'}
-            {activePatient === null && !isGenerating && '// ai-generated synthetic patient — not real data'}
+          <p style={{ marginTop: 11, fontFamily: 'var(--font-mono)', fontSize: 10, color: generateError ? 'var(--ineligible)' : 'var(--text-hint)', letterSpacing: '0.05em', textAlign: 'right' }}>
+            {generateError && `// generate failed: ${generateError}`}
+            {!generateError && activePatient === 'gaucher' && '// example loaded — gaucher disease patient, synthetic data'}
+            {!generateError && activePatient === 'parkinson' && '// example loaded — parkinson disease patient, synthetic data'}
+            {!generateError && activePatient === null && !isGenerating && '// ai-generated synthetic patient — not real data'}
             {isGenerating && '// generating patient via llm...'}
           </p>
         </div>
