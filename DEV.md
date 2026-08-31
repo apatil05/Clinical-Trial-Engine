@@ -80,6 +80,25 @@ If you already have a `.env` with real keys in it, skip the `cp`. It overwrites.
 
 ---
 
+## Tests
+
+```bash
+# Backend — 35 tests, offline, no API key needed
+cd backend
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+
+# Frontend — 12 tests, no dependencies
+cd frontend
+npm test
+```
+
+Neither suite touches the network. If a test wants a real Nebius or Supabase
+call, it is written wrong.
+
+---
+
 ## Logs (background mode)
 
 ```bash

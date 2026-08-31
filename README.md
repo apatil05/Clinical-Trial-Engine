@@ -201,7 +201,21 @@ uvicorn main:app --reload
 Backend runs at `http://localhost:8000`
 API docs at `http://localhost:8000/docs`
 
-### 5. Run the frontend
+### 5. Run the tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q          # 35 tests, no network, no API key needed
+
+cd ../frontend
+npm test                            # 12 tests, no dependencies
+```
+
+Both suites run fully offline. The backend tests stub every LLM call and stand in
+a fake Supabase client, so they cost nothing and need no credentials.
+
+### 6. Run the frontend
 
 ```bash
 cd frontend
@@ -258,9 +272,7 @@ Read this before running the engine against anything that is not synthetic data.
 
 **`GET /queue` returns every patient's results.** No auth, no filter. Nothing in the UI calls it; it exists for local inspection. Accounts are on the roadmap and that is when it gets scoped.
 
-**Dual-agent reconciliation is weaker than it looks.** The two passes are joined on `criterion_id`, and the matching prompt never pins the id scheme, so the two passes have no reason to agree on ids. In practice most criteria fall through and keep the first pass's verdict without a contested flag. A run producing zero contested criteria across every trial is this, not agreement. Tracked in [AUDIT.md](AUDIT.md) as C1.
-
-**The cache path is verified by reading, not by running.** `get_cached_matches_for_patient` and the recompute-on-load behavior have not been executed end to end against a live database. See [AUDIT.md](AUDIT.md) C6.
+**The cache path has not been exercised against real Postgres.** The recompute-on-load behavior is covered by tests against a stubbed Supabase client, which proves the logic: change a penalty weight and a cached row's score moves. What is untested is the PostgREST round trip itself, because the project was paused throughout. See [AUDIT.md](AUDIT.md) C6.
 
 ---
 

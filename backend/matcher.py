@@ -86,7 +86,7 @@ Schema:
   "summary": string (2-3 sentences, written in plain language for the patient),
   "criteria_breakdown": [
     {
-      "criterion_id": string,
+      "criterion_id": string (inc_1, inc_2, ... for inclusion; exc_1, exc_2, ... for exclusion),
       "criterion_text": string,
       "type": "inclusion" | "exclusion",
       "verdict": "ELIGIBLE" | "INELIGIBLE" | "UNCERTAIN",
@@ -101,6 +101,11 @@ Scoring rules:
 - Deduct 30-40 points per met exclusion criterion (exclusions are disqualifying).
 - UNCERTAIN criteria do not reduce the score — missing data is not a failure.
 - overall_score must reflect the final sum after all deductions.
+
+Criterion id rules:
+- Inclusion criteria are inc_1, inc_2, inc_3, ... Exclusion criteria are exc_1, exc_2, exc_3, ...
+- Number them strictly in the order they appear in the trial eligibility text above.
+- The id identifies a position, not a topic. The Nth inclusion criterion in the text is always inc_N, whether or not you evaluate the ones before it.
 
 Verdict rules:
 - ELIGIBLE: Patient data clearly meets this criterion.
@@ -290,31 +295,52 @@ def compute_score_from_breakdown(breakdown: list[CriterionVerdict]) -> tuple[int
 def _reconcile_passes(a: MatchOutput, b: MatchOutput) -> MatchOutput:
     """
     Merge both passes into one breakdown, then score it deterministically.
-    Where they disagree the criterion drops to UNCERTAIN + contested=True.
 
-    Known gap: the join is on criterion_id, and MATCHING_PROMPT never pins the
-    id scheme. Two passes have no reason to agree on ids, so in practice most
-    criteria fall through the `c_b is None` branch and keep pass A's verdict
-    with no contested flag. Symptom is a run with 0 contested across every
-    trial. Fixing it means joining on normalized criterion_text or pinning the
-    ids in the prompt. See AUDIT.md C1.
+    The join is on criterion_id, which MATCHING_PROMPT pins to a positional
+    scheme (inc_N is the Nth inclusion criterion in the trial text) so that both
+    passes mean the same criterion by the same id. That pinning is load-bearing.
+    Without it the passes agreed on the id scheme most of the time and then
+    silently drifted: one measured run had pass B emit an extra inc_4, which
+    shifts every later id and makes the join compare different criteria.
+
+    Three cases:
+      in both, same verdict   keep it
+      in both, different      UNCERTAIN + contested, because a disagreement is
+                              exactly the data gap a human should look at
+      in one pass only        keep it, with the verdict the pass that saw it
+                              gave. Not contested: the passes did not disagree
+                              about this criterion, one of them just never
+                              enumerated it. Iterating pass A alone used to drop
+                              these, so anything only B found scored as if the
+                              trial had never asked for it.
     """
+    a_by_id = {c.criterion_id: c for c in a.criteria_breakdown}
     b_by_id = {c.criterion_id: c for c in b.criteria_breakdown}
 
+    # pass A order first, then anything only B found, so the table stays readable
+    ordered_ids = [c.criterion_id for c in a.criteria_breakdown]
+    ordered_ids += [i for i in b_by_id if i not in a_by_id]
+
     reconciled: list[CriterionVerdict] = []
-    for c_a in a.criteria_breakdown:
-        c_b = b_by_id.get(c_a.criterion_id)
-        if c_b is None or c_a.verdict == c_b.verdict:
+    for cid in ordered_ids:
+        c_a, c_b = a_by_id.get(cid), b_by_id.get(cid)
+
+        if c_a is None or c_b is None:
+            reconciled.append(c_a or c_b)
+            continue
+
+        if (c_a.verdict or "").strip().upper() == (c_b.verdict or "").strip().upper():
             reconciled.append(c_a)
-        else:
-            reconciled.append(CriterionVerdict(
-                criterion_id=c_a.criterion_id,
-                criterion_text=c_a.criterion_text,
-                type=c_a.type,
-                verdict="UNCERTAIN",
-                reason=f"Agents disagreed ({c_a.verdict} vs {c_b.verdict}) — insufficient data to confirm.",
-                contested=True,
-            ))
+            continue
+
+        reconciled.append(CriterionVerdict(
+            criterion_id=cid,
+            criterion_text=c_a.criterion_text,
+            type=c_a.type,
+            verdict="UNCERTAIN",
+            reason=f"Agents disagreed ({c_a.verdict} vs {c_b.verdict}) — insufficient data to confirm.",
+            contested=True,
+        ))
 
     score, status = compute_score_from_breakdown(reconciled)
 
