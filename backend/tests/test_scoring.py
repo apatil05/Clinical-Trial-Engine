@@ -227,3 +227,20 @@ def test_a_dead_trial_does_not_kill_the_batch():
             matcher._single_match_pass = real
     results, _ = asyncio.run(run())
     assert {r[0].nct_id for r in results} == {"N0", "N2"}
+
+
+def test_duplicate_ids_from_one_pass_are_not_double_counted():
+    """A pass occasionally repeats an id. Charging its penalty twice would make
+    the score depend on the model's bookkeeping rather than the criteria."""
+    a = out([cv("inc_1", "inclusion", "UNCERTAIN"), cv("inc_1", "inclusion", "UNCERTAIN")])
+    b = out([cv("inc_1", "inclusion", "UNCERTAIN")])
+    rec = matcher._reconcile_passes(a, b)
+    assert len(rec.criteria_breakdown) == 1
+    assert rec.overall_score == 92          # one -8, not two
+
+
+def test_union_preserves_pass_a_ordering():
+    a = out([cv("inc_1", "inclusion", "ELIGIBLE"), cv("exc_1", "exclusion", "ELIGIBLE")])
+    b = out([cv("exc_2", "exclusion", "ELIGIBLE"), cv("inc_1", "inclusion", "ELIGIBLE")])
+    rec = matcher._reconcile_passes(a, b)
+    assert [c.criterion_id for c in rec.criteria_breakdown] == ["inc_1", "exc_1", "exc_2"]

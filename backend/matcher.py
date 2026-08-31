@@ -317,9 +317,15 @@ def _reconcile_passes(a: MatchOutput, b: MatchOutput) -> MatchOutput:
     a_by_id = {c.criterion_id: c for c in a.criteria_breakdown}
     b_by_id = {c.criterion_id: c for c in b.criteria_breakdown}
 
-    # pass A order first, then anything only B found, so the table stays readable
-    ordered_ids = [c.criterion_id for c in a.criteria_breakdown]
-    ordered_ids += [i for i in b_by_id if i not in a_by_id]
+    # pass A order first, then anything only B found, so the table stays readable.
+    # deduped because a pass occasionally emits the same id twice, and without
+    # this that criterion gets appended twice and its penalty charged twice.
+    seen: set[str] = set()
+    ordered_ids: list[str] = []
+    for cid in [c.criterion_id for c in a.criteria_breakdown] + list(b_by_id):
+        if cid not in seen:
+            seen.add(cid)
+            ordered_ids.append(cid)
 
     reconciled: list[CriterionVerdict] = []
     for cid in ordered_ids:

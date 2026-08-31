@@ -97,6 +97,9 @@ npm test
 Neither suite touches the network. If a test wants a real Nebius or Supabase
 call, it is written wrong.
 
+The UI end-to-end test is separate because it does spend money and needs both
+servers up. See `frontend/e2e/README.md`.
+
 ---
 
 ## Logs (background mode)
