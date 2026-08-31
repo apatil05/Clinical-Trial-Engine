@@ -6,10 +6,17 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 async function request(path, options = {}) {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    })
+  } catch {
+    throw new Error(
+      `Cannot reach the backend at ${BASE_URL}. Start it with: cd backend && ./run_dev.sh`
+    )
+  }
   const data = await response.json()
   if (!response.ok) {
     const message = data?.detail?.error || data?.detail || data?.error || 'Request failed'

@@ -1,10 +1,14 @@
+//imports useState tool and page level components
 import { useState } from 'react'
 import PatientInput from './components/PatientInput.jsx'
 import ScreeningLoader from './components/ScreeningLoader.jsx'
 import Queue from './components/Queue.jsx'
 import MatchResult from './components/MatchResult.jsx'
+
+//importing functions that talk to back end
 import { extractProfile, runBulkMatch } from './api.js'
 
+//step order for what page users typically see (except for going back to edit)
 const STEPS = ['input', 'confirm', 'screening', 'results', 'detail']
 
 // how many trials one screening run pulls and scores. two Nebius calls per
@@ -12,12 +16,14 @@ const STEPS = ['input', 'confirm', 'screening', 'results', 'detail']
 // takes and what it costs. drop it to 3 when testing.
 const MAX_TRIALS = 8
 
+//confidence badge configs
 const CONFIDENCE_CONFIG = {
   high:      { label: 'High confidence', icon: '✓' },
   low:       { label: 'Low confidence — verify', icon: '?' },
   not_found: { label: 'Not detected', icon: '!' },
 }
 
+//variables below hold a piece of memory between renders
 export default function App() {
   const [step, setStep]                         = useState('input')
   const [patientText, setPatientText]           = useState('')
@@ -32,6 +38,7 @@ export default function App() {
   const [error, setError]                       = useState(null)
   const [cacheInfo, setCacheInfo]               = useState(null)
 
+  //called when users submits patient notes on input screen
   async function handleAnalyze(text) {
     setPatientText(text)
     setError(null)
