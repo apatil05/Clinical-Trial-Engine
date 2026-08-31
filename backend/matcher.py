@@ -38,12 +38,11 @@ MAX_CRITERIA_CHARS = int(os.getenv("MAX_CRITERIA_CHARS", "6000"))
 # 253B takes ~20s a call. Raise this and Nebius starts rate-limiting the model.
 MATCH_CONCURRENCY = int(os.getenv("MATCH_CONCURRENCY", "2"))
 
-# raising this does NOT fix the parse failures, despite looking like it should.
-# Nemotron Ultra opens with a <think> block and stops mid-thought at 8-10k
-# characters having emitted no JSON. Measured across two runs: at 4096 the
-# bodies came back 8089-9989 chars, at 16384 they came back 8191-9867. Same
-# distribution, so the cap was never what was cutting them off. The actual
-# lever is the system prompt. See AUDIT.md C2.
+# 4096 is plenty once THINKING_OFF is in play, because the model then answers
+# in a few hundred characters. Do not try to fix parse failures by raising it:
+# measured across two runs, response bodies came back 8089-9989 chars at 4096
+# and 8191-9867 at 16384. Same distribution. The cap was never what cut them
+# off. See THINKING_OFF below.
 MATCH_MAX_TOKENS = int(os.getenv("MATCH_MAX_TOKENS", "4096"))
 
 # retries per pass on transient failure (rate limits, timeouts).
@@ -60,6 +59,16 @@ client = AsyncOpenAI(
 
 MODEL_DEFAULT = os.getenv("NEBIUS_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 MODEL_MATCH = os.getenv("NEBIUS_MODEL_MATCH", MODEL_DEFAULT)
+
+# Nemotron Ultra decides how much to reason from a system message, and with no
+# system message at all it reasons without stopping. It opened every scoring
+# response with <think>, ran 8-10k characters, and returned having emitted no
+# JSON, which failed 11 of 15 calls. Same prompt with this line: 465 characters,
+# clean JSON, finish_reason=stop.
+#
+# Nvidia spells it exactly like this. "detailed thinking off" works, paraphrases
+# do not. Harmless on the non-reasoning models, so it is sent unconditionally.
+THINKING_OFF = {"role": "system", "content": "detailed thinking off"}
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +163,7 @@ async def _single_match_pass(
                 call_counter[0] += 1
             response = await client.chat.completions.create(
                 model=MODEL_MATCH,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[THINKING_OFF, {"role": "user", "content": prompt}],
                 temperature=temperature,
                 max_tokens=MATCH_MAX_TOKENS,
             )

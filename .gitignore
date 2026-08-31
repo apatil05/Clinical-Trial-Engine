@@ -30,6 +30,11 @@ yarn-error.log*
 # Local audit + baseline artifacts (screenshots, JSON captures, logs)
 .baseline/
 
+# Internal working notes. These name the live Supabase project and are not
+# for a public repo. AUDIT.md is the one that is meant to be published.
+HANDOFF.md
+BASELINE.md
+
 # Claude Code local settings
 .claude/settings.local.json
 
