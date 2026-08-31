@@ -2,7 +2,7 @@
 test_persistence.py — cache loading, patient identity, and schema agreement.
 
 The Supabase client is replaced with a fake, so this runs offline. What it
-cannot prove is the PostgREST round trip against real Postgres. See AUDIT.md C6.
+cannot prove is the PostgREST round trip against a real database.
 """
 
 import hashlib

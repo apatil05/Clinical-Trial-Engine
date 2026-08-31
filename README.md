@@ -127,9 +127,7 @@ Trials are ranked by eligibility score. Each result shows the overall score, dat
 │   └── migration_add_cache.sql             # Cache column migration
 │
 ├── .env.example
-├── AUDIT.md                                 # Pre-release audit: findings, fixes, what is still open
-├── DEV.md                                   # Start/stop/restart commands
-├── docs/COMMENT_STYLE.md                    # How comments in this repo are written
+├── DEV.md                                   # Start/stop/restart commands, tests
 └── README.md
 ```
 
@@ -272,7 +270,7 @@ Read this before running the engine against anything that is not synthetic data.
 
 **`GET /queue` returns every patient's results.** No auth, no filter. Nothing in the UI calls it; it exists for local inspection. Accounts are on the roadmap and that is when it gets scoped.
 
-**The cache path has not been exercised against real Postgres.** The recompute-on-load behavior is covered by tests against a stubbed Supabase client, which proves the logic: change a penalty weight and a cached row's score moves. What is untested is the PostgREST round trip itself, because the project was paused throughout. See [AUDIT.md](AUDIT.md) C6.
+**The cache path has not been exercised against real Postgres.** The recompute-on-load behavior is covered by tests against a stubbed Supabase client, which proves the logic: change a penalty weight and a cached row's score moves. What is untested is the PostgREST round trip itself, because the project was paused throughout.
 
 ---
 

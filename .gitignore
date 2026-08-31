@@ -34,10 +34,11 @@ yarn-error.log*
 # A copy is in the session scratchpad if you want it back.
 ClinicalTrialEngine_Pitch_Spec.pdf
 
-# Internal working notes. These name the live Supabase project and are not
-# for a public repo. AUDIT.md is the one that is meant to be published.
+# Working notes. Not part of how the engine runs, so not in the repo.
 HANDOFF.md
 BASELINE.md
+AUDIT.md
+docs/
 
 # Claude Code local settings
 .claude/settings.local.json

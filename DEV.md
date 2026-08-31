@@ -97,8 +97,18 @@ npm test
 Neither suite touches the network. If a test wants a real Nebius or Supabase
 call, it is written wrong.
 
-The UI end-to-end test is separate because it does spend money and needs both
-servers up. See `frontend/e2e/README.md`.
+**UI end-to-end.** Separate because it spends money and needs both servers up.
+Drives the real UI through all five steps and checks that no summary on screen
+states a score contradicting the one shown beside it. Roughly 17 model calls,
+a couple of minutes, well under a dollar.
+
+```bash
+cd frontend/e2e
+npm init -y && npm install @playwright/test && npx playwright install chromium
+npx playwright test --config=playwright.config.mjs
+```
+
+Screenshots of each step land in `frontend/e2e/test-results/`.
 
 ---
 
